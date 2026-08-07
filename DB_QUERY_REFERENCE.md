@@ -25,7 +25,7 @@ Domains currently covered:
 
 - `jobs.general`
 - `finance`
-- `personnel`
+- `personnel` (basic) / `personnel.crew_scheduling` (full Enhanced-Crewing chain — see below)
 - `transport`
 - `equipment_catalog` (`Hetype`/`category`, plus how equipment types relate to
   each other — see below)
@@ -43,6 +43,29 @@ Human-readable reference:
 Primary table:
 
 - `JOBS` at [db.sql](/C:/Users/shpar/OneDrive/Документы/New%20project/Hiretrack/db.sql:5441)
+
+## Status Codes (`defcon` lookup)
+
+`JOBS.Status`, `Crew.xStatus`, `Crew_header.xStatus`, and `EQLISTS.Defcon` all
+point at the same shared lookup table, `defcon.Defcon_idx` (`SMALLINT`, signed
+— negative codes exist). Confirmed live 2026-08-07 by reading the table
+directly (no need to guess from sample job titles):
+
+| `Defcon_idx` | `Defcon_text` | Notes |
+|---|---|---|
+| -3 | Завершено | `System=False` |
+| -2 | Ignore | `System=False`, internal/hidden marker |
+| -1 | Отмена | Cancelled |
+| 0 | Disregard | `System=True` |
+| 1 | Запрос | Quote/enquiry stage |
+| 2 | Бронь | Provisional booking |
+| 3 | Подтверждено | Confirmed |
+| 4 | В работе | In progress |
+| 5 | Завершено | `System=False`, distinct row from -3 (different `SortOrder`) |
+| 6 | Подтвержден (внутренний) | Internal-confirmed variant |
+
+`Defcon_text` for -3 and 5 both display as "Завершено" but are different rows
+(`SortOrder` 5 vs 7) — don't assume the text is unique per code.
 
 ## Confirmed Foreign Keys
 
@@ -97,6 +120,73 @@ Primary table:
   Source: [db.sql](/C:/Users/shpar/OneDrive/Документы/New%20project/Hiretrack/db.sql:2973)
 - `CrewAccommodation.xJob -> JOBS.JobNo`
   Source: [db.sql](/C:/Users/shpar/OneDrive/Документы/New%20project/Hiretrack/db.sql:2416)
+
+### personnel.crew_scheduling — full chain (confirmed live 2026-08-07, read-only)
+
+Traced end-to-end against a real job (`JOBS.Job_Ref = 'Р6976МСК'`, note the
+**Cyrillic Р**, not Latin `P` — every `Job_Ref` uses it) and cross-checked
+name/role/count against the HireTrack NX client's own crew grid, 100% match:
+
+```
+JOBS (JobNo, Job_Ref, Job_Title, "Due Out"/"Due Back", Status->defcon,
+      xCrewManager->Name2 = Crew Boss, xCrewCoordinator, NewCrewing)
+  -> Crew_header   (Idx, XJob->JOBS.JobNo, Title = phase name e.g. "Обслуживание",
+                     "Function"->Crew_Function.Idx, xStatus->defcon)
+     -> Crew        (Idx, Header->Crew_header, Type->CREWTYPE.Crewindex = role name,
+                      "Out"/"Back", Quantity, Allocated)
+        -> CrewPositions (IDX, xCrewRequest->Crew.Idx, xPerson->Name2.NameCounter
+                           [NULL = unassigned], Status (BYTE, cast!), Description
+                           = "Position #2" etc. for extra slots on the same request)
+           -> CrewShifts (IDX, xPosition->CrewPositions.IDX,
+                           xActivity->CrewActivities.IDX, BookingState/Status/
+                           OrderStatus/ShiftType — all BYTE, cast!)
+              -> CrewActivities (IDX, xArea->Crew_header.Idx, ActivityDate,
+                                 ActivityType (BYTE), Description = "Day N")
+Name2 (NameCounter PK, FullName/FORENAME/SURNAME, CREW bool = crew-eligible,
+       Archived, Hold) — people
+CREWTYPE (Crewindex PK, CrewText) — role display names
+Crew_Function (Idx PK, "Function") — phase/area category names (separate from
+  Crew_header.Title, which is the actual free-text phase label shown in the UI)
+```
+
+**The filter for "unassigned personnel" the whole tool is built around:**
+`CrewPositions.xPerson IS NULL` (equivalently `CAST(CrewPositions.Status AS
+SMALLINT) = 0`, i.e. `ssUnprocessed` — see enum table below, both agree in
+every case checked so far).
+
+#### Enhanced-Crewing enum fields (decoded from live `"#Fields".FIELD_DESC` —
+Pascal `TSomeEnum = (member0, member1, ...)`, ordinal = position, **0-based**)
+
+All of these are `BYTE` columns — always `CAST(col AS SMALLINT)`, see driver
+quirks below, or you get garbage.
+
+| Field | Delphi type | Values (ordinal = list position) |
+|---|---|---|
+| `CrewPositions.Status`, `CrewShifts.Status` | `TShiftStatus` | 0 ssUnprocessed, 1 ssInProgress, 2 ssPencilled, 3 ssBooked |
+| `CrewPositions.OrderStatus` | `TPositionOrderStatus` | 0 posNotRequired, 1 posOutstandingNone, 2 posOutstandingSome, 3 posFullfilled |
+| `CrewShifts.OrderStatus`, `CrewAccommodation.OrderStatus` | `TShiftOrderStatus` | 0 sosNone, 1 sosPartial, 2 sosFullfilled, 3 sosOver |
+| `CrewShifts.BookingState` | `TShiftBookingState` | 0 sbsIncQuote, 1 sbsExcQuote, 2 sbsCancelled, 3 sbsBlackout |
+| `CrewShifts.ShiftType` | `TShiftType` | 0 stUnknown, 1 stNormal, 2 stBlackout |
+| `CrewShifts.AccommodationStatus` | `TAccommodationStatus` | 0 asNotRequired, 1 asClientProvides, 2 asWeProvide |
+| `CrewActivities.ActivityType` | `TActivityType` | 0 atOnSite, 1 atWarehouse — constant `0` on every row seen so far |
+| `CrewPositionOffers.OfferStatus` | `TCrewOfferStatus` | 0 cosShortlisted, 1 cosContacted, 2 cosUnavailable, 3 cosPossiblyAvailablity, 4 cosAvailable, 5 cosRejected, 6 cosPencille[d?] (name truncated in FIELD_DESC, re-check live if this one matters) |
+| `Crew.RecType` | `TCrewRecordType` | 0 crtOld, 1 crtUpgrading, 2 crtUpgraded, 3 crtNew |
+| `Crew.TaskRepeatOptions` | `TTaskRepeatOptions` | 0 troNever, 1 troDaily, 2 troWeekly, 3 troMonthly, 4 troAnnually |
+| `Crew.TaskRepeatEndType` | `TTaskRepeatEndType` | 0 tretNever, 1 tretAfterDate, 2 tretAfterOccurrences |
+| `JOBS.InvoiceState` | `TJobInvoiceState` | 0 jisNothingToInvoice, 1 jisDoNotInvoice, 2 jisNothingInvoicedYet, 3 jisPartiallyInvoiced, 4 jisFullyInvoiced |
+| `JOBS.JobVisibility` | `TJobVisibility` | 0 jvEverywhere, 1 jvNotInSearches |
+| `Name2.xRecordStatus` | `TRecordStatus` | 0 rsIntended, 1 rsPending, 2 rsAccepted, 3 rsDeleted |
+| `CrewTasks.Status` | also called `TRecordStatus` in `FIELD_DESC` but a **different** member list — 0 rsAny, 1 ctsLegacy, 2 ctsNew, 3 ctsRetired (don't reuse the `Name2.xRecordStatus` mapping here) |
+| `Name2.TransactVia` | `TCrewTransVia` | 0 ctvPerson, 1 ctvPersonAsCompany, 2 ctvAgency, 3 ctvInHouse |
+| `CrewAffinities.LinkType` | `TAffinityLinkType` | 0 altHandler, 1 altCrewBoss |
+| `CrewAccommodation.Flag` | `TAccommodationFlag` | 0 afNone, 1 afShiftDateChange, 2 afShiftRoomChange |
+| `CrewAccommodationLkp.AccommodationDay` | `TAccommodationDay` | 0 adBeforeShift, 1 adOnShift, 2 adAfterShift |
+| `CREWTYPE.CrewPayRateCompare` | `TCrewPayRateCompare` | 0 cprcHourly, 1 cprcDaily |
+| `CrewTasks.TaskType` | `TCrewTaskType` | 0 cttUnassigned, 1 cttUnavailable |
+
+Verified live against the traced job: all 5 real assigned `CrewPositions` rows
+→ `Status=3` (`ssBooked`), the 1 unassigned row → `Status=0` (`ssUnprocessed`,
+`xPerson=NULL`) — the two unassigned signals agree.
 
 ### transport and equipment
 
@@ -224,6 +314,71 @@ transfers, section copying) rather than a single new line — pattern #2 above
 bypasses all of that, which is fine for a simple new line but not a
 substitute for these procedures' full behavior.
 
+### Writing to HireTrack — personnel/crew (found, NOT yet executed — read-only research only, 2026-08-07)
+
+The NX client is a thick client, and per-field `FIELD_DESC` text plus these
+stored functions confirm crew records are **never created as a bare blank
+`INSERT`** — the client always **clones an existing row** (a template
+header/position, or the previous day when adding a shift), then date-shifts
+it. All found in `db.sql`'s `CREATE FUNCTION`/`CREATE PROCEDURE` statements —
+inspected as source only, never called.
+
+- **`CloneCrewHeader(aHeaderID, aJobID, aDaysAdd, aCloneCrewDetails,
+  aJobClone)`** (`db.sql:7884`) — creates a new `Crew_header` (phase) by
+  cloning an existing one, offsetting `ScheduleStart/End`/`PriceStart/End` by
+  `aDaysAdd` days (legacy crewing) or, for `NewCrewing=True` jobs, cloning the
+  header's `CrewActivities` rows (the actual "Day N" calendar) and tracking
+  the source via `xClonedFrom`. If `aCloneCrewDetails`, cascades into
+  `CloneCrewEnhanced` (new crewing) or `CloneCrew` (legacy) to also clone the
+  roles/positions/shifts underneath. Returns the new `Crew_header.Idx`.
+- **`CloneCrewEnhanced(aCrewID, aJobID, aOldHeaderID, aNewHeaderID,
+  aJobClone)`** (`db.sql:7764`) — the "New Crewing" (Enhanced) path: for each
+  `Crew` role request under a header, clones the `Crew` row itself, then its
+  `CrewPositions`, then that position's `CrewShifts` — but only for shifts
+  whose `CrewActivities` row already has a matching `xClonedFrom` counterpart
+  under the new header (shifts on days that don't exist in the new header get
+  silently dropped). Ends by calling `TotalizeShiftsForRolesOnJob` to
+  recalculate the parent `Crew` totals. **This is the function actually used
+  when `NewCrewing=True`** (true for every job checked this session) —
+  `CloneCrew` (legacy) explicitly refuses to run and tells the caller to use
+  this one instead (`SIGNAL 'The CloneEnhancedCrew SP should be used instead
+  of CloneCrew'`).
+- **`CloneCrewPosition(aCrewPositionID, aCloneShifts)`** (`db.sql:7978`) — the
+  simplest one: clones a single `CrewPositions` row (same `xCrewRequest`,
+  same `Description` — i.e. this is exactly the mechanism behind a "Position
+  #2" slot on the same role request) and optionally its `CrewShifts`. Returns
+  the new `CrewPositions.IDX`.
+- **`TotalizeShiftsForRolesOnJob(aJobID, aRoleIDs)`** (`db.sql:16060`) —
+  recalculates `Crew.LabourCharge/PDCharge/TravelCharge/OvertimeCharge/
+  AccommodationCharge(ForBilling)/LabourPay/.../Allocated/Selected` from that
+  role's live `CrewShifts`. **Must be called after any shift-level mutation**
+  affecting a role's totals — `CloneCrewEnhanced` already does this itself.
+  `aRoleIDs` is a literal comma-separated ID list interpolated into dynamic
+  SQL (`EXECUTE IMMEDIATE`), or blank for "the whole job."
+- **`SyncCrewPositionOrderStatus(aPositionID)`** (`db.sql:15616`) and
+  **`SyncCrewShiftOrderStatus(aShiftID, aSyncAfterOrdering)`** (`db.sql:15652`)
+  — recompute a position's/shift's `OrderStatus` from its shifts'/purchase
+  orders' state. **`SyncCrewPositionOffers(aSourcePosition,
+  aDestPosition)`** (`db.sql:15587`) copies `CrewPositionOffers` rows from one
+  position to another and pushes the source's `xPerson`/`Status` onto the
+  destination (never downgrading `Status`) — this looks like the actual
+  "assign this offered person to the position" commit step.
+- Read-only helpers (`READS SQL DATA`, safe to `SELECT` directly, no `{CALL
+  ...}` needed): `GetCrewFunctionNameFromCrewHeaderID(aCrewHeaderID)`,
+  `GetCrewTitleFromCrewHeaderID(aCrewHeaderID)`,
+  `GetCrewTypeTextFromID(aCrewTypeID)` (`db.sql:10899-10925`) — thin wrappers
+  around the same joins already in the `personnel.crew_scheduling` section
+  above; no need to call these separately if already joining `Crew_header`/
+  `CREWTYPE` directly.
+
+**Not yet found**: a function that creates a brand-new `Crew_header` /
+`Crew` / `CrewPositions` chain **from scratch** (no source to clone) — every
+creation path found goes through cloning something. If Stage 3 needs to add
+a role/position that has no existing template to clone, that path is still
+unconfirmed and needs either a live capture of the NX client's own traffic or
+further `db.sql` search (tried: `grep -i "CREATE \(FUNCTION\|PROCEDURE\)"
+db.sql | grep -i crew` — the list above is everything that matched).
+
 ### NexusDB / pyodbc driver quirks (apply to any query against this DB)
 
 - **`BYTE` columns return garbage large values unless cast.** `CAST(col AS
@@ -254,6 +409,28 @@ substitute for these procedures' full behavior.
 - `#dummy` is a built-in single-row pseudo-table (like Oracle's `DUAL`) —
   used throughout HireTrack's own procedures for `SELECT expr FROM #dummy`
   and works the same over plain ODBC.
+- **`"#Fields"` and `"#Tables"` are live, queryable system tables** with the
+  exact same columns as the `all.csv`/`fields from jobs.csv` exports (this is
+  almost certainly how those CSVs were generated) — `SELECT * FROM "#Fields"
+  WHERE TABLE_NAME = ?` gets you live `FIELD_DESC` for any table, including
+  ones not covered by the existing CSV exports (e.g. `Name2`, most `Crew*`
+  tables). `FIELD_DESC` frequently spells out the exact Pascal enum type and
+  its member names for `BYTE`/`WORD` status-style columns — check here before
+  reverse-engineering an enum from sample data. Must be double-quoted
+  (`"#Fields"`) since NexusDB SQL treats `#` specially.
+- **Reserved/ambiguous column names need double-quote identifiers, not square
+  brackets.** `SELECT [Due Out] FROM JOBS` is a syntax error; `SELECT "Due
+  Out" FROM JOBS` works. Hit this on `JOBS."Due Out"/"Due Back"`,
+  `Crew."Out"/"Back"`, `Crew_header."Function"` — assume any short/common
+  English word used as a column name needs quoting.
+- **Cyrillic `CHAR` columns decode correctly with plain `cp1251`** —
+  `conn.setdecoding(pyodbc.SQL_CHAR, encoding="cp1251")` and same for
+  `SQL_WCHAR`. If you see `�`/`?` garbage in Cyrillic text, it is very
+  likely **not** a real decode failure — printing a cp1251-decoded Python
+  string through an SSH pipe to a differently-configured console re-mangles
+  it. Verify by writing results to a file with `io.open(path, "w",
+  encoding="utf-8")` on the remote box and pulling the file via `scp`, never
+  by reading printed console output over SSH.
 
 ### finance
 
@@ -342,9 +519,14 @@ JOBS
 
 ```sql
 JOBS
-  -> Crew               via Crew.Job_no = JOBS.JobNo            -- business link, not FK in DDL slice above
-  -> CrewPositions      via CrewPositions.xCrewRequest = Crew.Idx
-  -> CrewShifts         via CrewShifts.xPosition = CrewPositions.IDX
+  -> defcon             via JOBS.Status = defcon.Defcon_idx      -- see Status Codes table above
+  -> Crew_header         via Crew_header.XJob = JOBS.JobNo        -- Crew_header.Title = phase name shown in UI
+  -> Crew                via Crew.Header = Crew_header.Idx        -- Crew.Type = role (join CREWTYPE for the name)
+  -> CREWTYPE            via Crew.Type = CREWTYPE.Crewindex
+  -> CrewPositions       via CrewPositions.xCrewRequest = Crew.Idx  -- xPerson IS NULL = unassigned
+  -> Name2               via CrewPositions.xPerson = Name2.NameCounter
+  -> CrewShifts          via CrewShifts.xPosition = CrewPositions.IDX
+  -> CrewActivities      via CrewShifts.xActivity = CrewActivities.IDX  -- Description = "Day N"
 ```
 
 ### transport and equipment
@@ -376,6 +558,14 @@ Company
 - A direct `Sort` insert only renders in the NX client if `sectionID` points
   at a real `EqSections` row — `NULL` inserts silently but invisibly. See
   "Writing to HireTrack" above.
+- `CrewTasks.Status` and `Name2.xRecordStatus` are both documented as
+  `TRecordStatus` in `FIELD_DESC`, but they are **different enums with
+  different members** (`CrewTasks.Status`: rsAny/ctsLegacy/ctsNew/ctsRetired
+  vs `Name2.xRecordStatus`: rsIntended/rsPending/rsAccepted/rsDeleted) — the
+  Delphi type name was reused, don't map one table's codes using the other's
+  member list just because the type name matches.
+- `defcon.Defcon_text` is not unique — codes `-3` and `5` both display
+  "Завершено" but are distinct rows with different `SortOrder`.
 
 ## Use This File For
 
