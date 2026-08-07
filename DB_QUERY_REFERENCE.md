@@ -371,13 +371,17 @@ inspected as source only, never called.
   above; no need to call these separately if already joining `Crew_header`/
   `CREWTYPE` directly.
 
-**Not yet found**: a function that creates a brand-new `Crew_header` /
-`Crew` / `CrewPositions` chain **from scratch** (no source to clone) — every
-creation path found goes through cloning something. If Stage 3 needs to add
-a role/position that has no existing template to clone, that path is still
-unconfirmed and needs either a live capture of the NX client's own traffic or
-further `db.sql` search (tried: `grep -i "CREATE \(FUNCTION\|PROCEDURE\)"
-db.sql | grep -i crew` — the list above is everything that matched).
+**Reframed (2026-08-07): this isn't a gap, it's the design.** No function
+creates a brand-new `Crew_header`/`Crew`/`CrewPositions` chain from scratch —
+every creation path goes through cloning something (a template header, the
+previous day's shift, position #1 for a "Position #2"), then date-shifting.
+Cloning an existing row *is* how this module creates records; there's no
+separate "from scratch" primitive to go looking for. Practical takeaway for
+Stage 3: adding a new role/position should itself clone the nearest existing
+row (same header, or the same `xCrewRequest`) rather than trying to
+`INSERT` a bare row with defaults — that's not just safer, it matches how the
+NX client itself behaves, so downstream totals/sync procedures (see above)
+get the same inputs they always do.
 
 ### NexusDB / pyodbc driver quirks (apply to any query against this DB)
 
