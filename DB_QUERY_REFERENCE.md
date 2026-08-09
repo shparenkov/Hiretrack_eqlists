@@ -314,6 +314,60 @@ transfers, section copying) rather than a single new line — pattern #2 above
 bypasses all of that, which is fine for a simple new line but not a
 substitute for these procedures' full behavior.
 
+**4. HireTrack's own `api_v2` REST API — found 2026-08-09, now the preferred
+way to create/modify bookings over HTTP (supersedes pattern #2 for that use
+case).** Not pyodbc at all — a REST API HireTrack NX itself exposes on the
+same HTTP gateway/port already used for the `api_v1` QBE-lookup calls
+elsewhere in this codebase (`hiretrack-eqlist-lookup.ts`,
+`hiretrack-equipment-lookup.ts`, `hiretrack-repair-create.ts`) — same
+`hiretrack.config.json` `baseUrl`/`headers`
+(`target`/`ipaddress`/`port`/`alias`/`username`/`password`), just a
+different URL prefix (`/api_v2/...` instead of `/api_v1/...`). Source: a
+Navigator Systems Zendesk article the user found and downloaded
+("HireTrack NX API V2"), cross-checked live against production.
+
+Key actions (all take `hiretrack_user_id`/`hiretrack_client_id` plus
+action-specific params — see the article for the full param list, or
+`hiretrack-booking-api.ts` for the implementation):
+- `check_availability` — real per-date-range availability, computed
+  server-side by HireTrack's own booking engine. Returns
+  `StocklevelForWarehouse` (total owned) and `AvailableQty` (free for the
+  requested `[availability_datetime_from, availability_datetime_to]` range) —
+  no need to reimplement `Sort.Defcon`/`Whlevel` logic yourself for this.
+  Pure inquiry, no side effects (`WriteResult.WriteAction: 0` = `bwaInquiryOnly`).
+- `initialise_new_booking` — creates a real Job + Eqlist + first line in one
+  call. Returns `JobID`/`JobRef`/`EqlistID`/`EqRef`.
+- `append_to_booking` — adds one more line to an existing Eqlist (needs the
+  `EqlistID` from `initialise_new_booking`). Returns real pricing
+  (`PreDiscountPrice`/`DiscountedPrice`/`DiscountRate`, pulled from the
+  client's actual price list).
+- `change_booking_quantity`, `change_booking_line_discount`,
+  `remove_from_booking`, `delete_job` — found in the doc, not yet exercised
+  live except `delete_job` (used to clean up a test booking, confirmed
+  working).
+
+**Confirmed live (2026-08-09):** `check_availability` against `Type 1203`
+(healthy stock) returned `StocklevelForWarehouse: 141`, `AvailableQty: 130`
+with correct RUB pricing; against `Type 660` (the equipment-catalog-match
+feature's original bad-match case) returned `StocklevelForWarehouse: 0`,
+`AvailableQty: 0`. `initialise_new_booking` + `append_to_booking` created
+real Job 7182/Eqlist 10647 under the dedicated "Test client"
+(`Company.CompanyCounter = 2` — use this for any experimentation, never a
+real client), then `delete_job` cleanly removed it.
+
+**Non-obvious gotcha: the doc mislabels HTTP methods.** It labels
+`check_availability` (and others) `GET` in the prose header, but its own
+curl example for the same action uses `--request POST` — and live testing
+confirmed **POST is correct**; `GET` returns `500 "No item found with name
+check_availability"`. Trust the curl examples over the bolded method label
+if they disagree.
+
+**Useful default IDs found live (2026-08-09, production `SA` database):**
+warehouse `1` = "Moscow" (`IsDefault=true`), pricelist `6` = "SA Rental
+Scheme", user `1` = "HireTrack_Admin" (`SystemAdmin=true`), company `2` =
+"Test client" (safe for `check_availability`/experimentation — never for a
+real booking, which needs the actual client's `CompanyCounter`).
+
 ### Writing to HireTrack — personnel/crew (found, NOT yet executed — read-only research only, 2026-08-07)
 
 The NX client is a thick client, and per-field `FIELD_DESC` text plus these
@@ -427,20 +481,6 @@ get the same inputs they always do.
   Out" FROM JOBS` works. Hit this on `JOBS."Due Out"/"Due Back"`,
   `Crew."Out"/"Back"`, `Crew_header."Function"` — assume any short/common
   English word used as a column name needs quoting.
-- **A parameterized string comparison combined with `(col IS NULL OR col =
-  FALSE)` in the same query raises `Type mismatch (nxtShortString <>
-  nxtBLOB)`**, even when the string column and the `IS NULL OR = FALSE`
-  column are unrelated. Confirmed live: `WHERE FullName = ? AND (Archived IS
-  NULL OR Archived = FALSE)` fails this way for every input tried, while the
-  identical `IS NULL OR = FALSE` clause with **zero** parameters works fine
-  (e.g. a plain `WHERE CREW = TRUE AND (Archived IS NULL OR Archived =
-  FALSE)` with no `?` at all), and `WHERE FullName = ? AND CREW = TRUE` (a
-  parameter with a plain equality, no `OR`/`IS NULL`) also works fine. NexusDB's
-  query engine appears to misinfer the bound parameter's type once an
-  `OR`/`IS NULL` boolean clause is present elsewhere in the `WHERE`. Fix:
-  filter what you can with plain equality in SQL, fetch the `IS NULL OR =
-  FALSE`-style column too, and filter it in application code afterward
-  instead of in the query.
 - **Cyrillic `CHAR` columns decode correctly with plain `cp1251`** —
   `conn.setdecoding(pyodbc.SQL_CHAR, encoding="cp1251")` and same for
   `SQL_WCHAR`. If you see `�`/`?` garbage in Cyrillic text, it is very

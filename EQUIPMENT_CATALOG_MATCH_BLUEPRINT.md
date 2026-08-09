@@ -25,10 +25,11 @@ No new service, no new port.
 - Read: full equipment-type catalog (`Hetype` + `category`), kept in sync via
   a delta feed instead of full re-queries.
 - Match: rider line items -> `Hetype.Type` (external to this backend; lives in
-  a Claude Skill that consumes the catalog endpoint).
-- Write: matched items into a HireTrack **Note** (`Notebook`/`notebookdetails`)
-  via this service's own operations. Direct Eqlist (`Sort`) writes are
-  possible (see "Write path" below) but not wrapped into this service yet.
+  a Claude Skill that consumes the catalog endpoint), checking real per-date
+  availability via HireTrack's own `api_v2` booking engine.
+- Write: matched items into a HireTrack **Note** (`Notebook`/`notebookdetails`,
+  lightweight) or a **real Job + Eqlist booking** (via `api_v2`, heavier) --
+  both wrapped into this service's own operations, see "Write paths" below.
 
 ## Read path: `equipment-catalog-full` / `equipment-catalog-changes`
 
@@ -107,7 +108,12 @@ inserts/updates/deletes, persist, advance `lastSyncAt`. `GET
 /lookups/equipment-catalog` is served straight from the in-memory map — no DB
 round-trip on read.
 
-## Write path: Note (`Notebook`/`notebookdetails`)
+## Write paths: Note vs. real booking
+
+Two write paths now exist, both wired into this service's own operations
+(no ad-hoc scripts needed for either):
+
+### Note (`Notebook`/`notebookdetails`) — lightweight, no Job created
 
 Uses the general "Note" write pattern documented in
 [DB_QUERY_REFERENCE.md § Writing to HireTrack](/C:/Users/shpar/OneDrive/Документы/New%20project/Hiretrack/DB_QUERY_REFERENCE.md)
@@ -115,28 +121,53 @@ Uses the general "Note" write pattern documented in
 all three price columns set, `priceEach` optional and falling back to
 `Hetype.Daily` when omitted) — implemented in
 `hiretrack_equipment_note_write.py` as the `create-note`/`add-note-line`
-operations. `:Eqtype` in that pattern is exactly the `Hetype.Type` the
-matching step (in the Claude Skill) produces.
+operations, wrapped by `hiretrack-equipment-note-write.ts` /
+`createEquipmentNoteWithLines`. `:Eqtype` in that pattern is exactly the
+`Hetype.Type` the matching step (in the Claude Skill) produces.
 
-### Transport and DSN
+Transport: pyodbc, same bridge-script style as the read operations, but
+through a separate writable DSN/connection (`HIRETRACK_WRITE_ODBC_DSN`,
+currently the `Claude` DSN on the server). The existing `HireTrack DSN` used
+by `hiretrack_stocktake_read.py` for reads is explicitly read-only — never
+point write operations at it.
 
-`create-note`/`add-note-line` go through pyodbc, same bridge-script style as
-the read operations — **but through a separate writable DSN/connection**
-(`HIRETRACK_WRITE_ODBC_DSN`, currently the `Claude` DSN on the server). The
-existing `HireTrack DSN` used by `hiretrack_stocktake_read.py` for reads is
-explicitly read-only — never point write operations at it.
+### Real booking (Job + Eqlist) — via `api_v2`, not raw `Sort` inserts
 
-### Status
+Superseded the earlier "raw `INSERT INTO Sort`, ad-hoc, unproven totals
+recalculation" approach entirely (2026-08-09): HireTrack NX ships its own
+booking-write REST API (`api_v2`, on the same HTTP gateway/port used for the
+existing `api_v1` QBE lookups already in this codebase —
+`hiretrack-eqlist-lookup.ts`, `hiretrack-equipment-lookup.ts`,
+`hiretrack-repair-create.ts` — same `hiretrack.config.json` `baseUrl`/
+`headers`). `hiretrack-booking-api.ts` wraps three `api_v2` actions:
 
-**The skill's built-in write path (`create-note`/`add-note-line`) targets
-Notes only.** Direct writes to a live Eqlist (`Sort`) are now confirmed to
-work (see the write pattern in `DB_QUERY_REFERENCE.md`, tested live against a
-job created specifically for testing, not a real booking) but aren't wrapped
-into this service's operations yet — done so far via ad-hoc Python scripts
-against the writable DSN. Before wiring this into the skill/service properly:
-confirm whether job/eqlist header totals recalculate correctly from a raw
-insert, and behavior when the destination Eqlist already has its own
-sections (only tested against an empty Eqlist so far).
+- `initialise_new_booking` — creates a real Job + Eqlist and its first line
+  in one call.
+- `append_to_booking` — adds one more line to that Eqlist.
+- `check_availability` — see the availability section below.
+
+`createHiretrackBooking()` batches these (1 `initialise` + N-1 `append`
+calls) the same way `createEquipmentNoteWithLines()` batches Note lines,
+exposed as `POST /lookups/equipment-bookings`.
+
+**Confirmed live (2026-08-09)** against production, using the dedicated
+"Test client" (`Company.CompanyCounter = 2`) so no real customer was
+touched: `initialise_new_booking` created Job 7182 / Eqlist 10647 with
+correct `JobRef`/`EqRef`; `append_to_booking` added a second line with
+correct pricing pulled from the client's price list (list price, discounted
+price, discount rate all correct); `delete_job` cleanly removed the whole
+test booking afterward. **The doc's own header labels `check_availability`
+and other actions as `GET`, but the actual working method is `POST`** — GET
+returns a 500 ("No item found with name...") — confirmed against the doc's
+own curl examples, which do use `--request POST` despite the mislabeled
+`GET` header text above them.
+
+Needs a **real `hiretrack_client_id`** (`Company.CompanyCounter`) — this is
+who the booking is made for, so unlike the Note path it must come from the
+user, not be defaulted. `hiretrack.config.json` fallback defaults used when
+not overridden: `defaultUserId` 1 (`HireTrack_Admin`), `defaultWarehouseId`
+1 (`Moscow`), `defaultPricelistId` 6 (`SA Rental Scheme`), `testClientId` 2
+(`Test client` — availability checks only, never use for a real booking).
 
 ## Endpoint surface (this feature)
 
@@ -144,61 +175,49 @@ sections (only tested against an empty Eqlist so far).
   in-memory snapshot described above (`/tickets/...` and `/api/tickets/...`,
   same as other `/lookups/*` routes; behind the existing password-auth cookie
   gate).
-- `POST /lookups/equipment-notes` (or similar — see route file for the
-  landed name) — creates a Note + lines from a confirmed match list. Callers
-  must have already gotten explicit user sign-off on the line list before
-  calling this; it is a real write to production HireTrack data.
+- `GET /lookups/equipment-availability` — real per-date-range availability
+  for one type via `check_availability` (see below).
+- `POST /lookups/equipment-notes` — creates a Note + lines from a confirmed
+  match list.
+- `POST /lookups/equipment-bookings/initialise`, `.../append` — low-level
+  single-`api_v2`-call wrappers.
+- `POST /lookups/equipment-bookings` — batched real-booking creation
+  (`createHiretrackBooking`), the one the Skill actually calls.
 
-## Planned (not built yet): availability-aware matching
+All write endpoints require callers to have already gotten explicit user
+sign-off on the line list before calling — real writes to production
+HireTrack data.
 
-Found live (2026-08-06): matching currently only looks at the `Hetype` catalog
-(equipment *types*), with zero visibility into physical stock. Concretely -
-"Professional Music Stand" (`Type 660`) was matched and inserted for a rider
-line, but `Type 660` has **0 physical `Item` rows**, while a near-identical
-generic option, "Пюпитр Ultimate JS-MS200" (`Type 1203`), has ~206. The
-matcher picked the zero-stock one purely on text similarity. Desired end
-state per the user: full **date-aware availability** (how many are free for
-the specific rider dates, not just total owned), not just a static stock
-count.
+## Shipped: availability-aware matching (2026-08-09)
 
-### What's confirmed so far
+Found live (2026-08-06): matching originally only looked at the `Hetype`
+catalog (equipment *types*), with zero visibility into physical stock.
+Concretely - "Professional Music Stand" (`Type 660`) was matched and
+inserted for a rider line, but `Type 660` has **0 physical `Item` rows**,
+while a near-identical generic option, "Пюпитр Ultimate JS-MS200"
+(`Type 1203`), has ~206. The matcher picked the zero-stock one purely on
+text similarity.
 
-- No server-side function computes this - the "Avail" column in HireTrack NX
-  is calculated client-side, nothing to just call.
-- Total owned count per `Type` = `SELECT COUNT(*) FROM Item WHERE Type = ?`
-  (cross-checked against `Whlevel.SiteOwns` for a few types, they agree).
-- Candidate formula, validated on exactly **one** live example so far (music
-  stand: 0 owned, one qty=1 reservation, NX showed `Avail = -1`, matching
-  `owned - reserved`):
-  `Avail = owned_item_count - SUM(Quant) over other Sort rows for that Type
-  where [D1,D2] overlaps the target [DateOut,DateBack] and the row counts as
-  an active booking (not virtual, not a cancelled/draft status)`.
+Originally planned as a hand-rolled formula over `Sort`/`Whlevel`/`Item`
+with unresolved `Sort.Defcon` semantics (see git history for that draft) —
+**scrapped entirely** once `api_v2`'s `check_availability` was found: it
+computes real date-range availability server-side (HireTrack's own booking
+engine, not a reimplementation), so there's no `Defcon` reverse-engineering
+needed at all.
 
-### What's still unresolved - do this before implementing
+**Confirmed live (2026-08-09)** against both known cases: `Type 1203`
+(healthy stock) returned `StocklevelForWarehouse: 141`,
+`AvailableQty: 130` for a real date range with correct discounted pricing;
+`Type 660` (the original bad match) returned `StocklevelForWarehouse: 0`,
+`AvailableQty: 0`, `BookingQty: 0` — exactly the case that should have been
+caught originally.
 
-- **`Sort.Defcon` / `defcon` table semantics are not reliably known.** The
-  `defcon` lookup has a `Function` column (0/1/2/3 seen) that looks like it
-  groups statuses into severity/activity tiers, and a `System` boolean, but
-  which combination means "counts against availability" vs "cancelled/draft,
-  ignore" has NOT been empirically confirmed - only one data point exists so
-  far, which didn't exercise this at all (no competing bookings). Validate
-  against 2-3 real examples where a type has multiple overlapping-date
-  bookings with different Defcon values, by comparing computed Avail against
-  what the NX client actually shows for the same Type/date range.
-- Whether `Whlevel` (per-site stock) needs to be split by `xSite`/warehouse
-  rather than summed, once multi-warehouse cases come up.
-
-### Proposed shape once validated
-
-- **Not** part of the static `equipment-catalog-full`/`-changes` sync (Part
-  A) - availability is date-range-scoped and highly dynamic, so it can't be
-  pre-cached the same way the mostly-static Hetype catalog is.
-- A separate **on-demand** endpoint, e.g.
-  `GET /lookups/equipment-availability?dateOut=...&dateBack=...&types=1,2,3`,
-  computed per request for the specific rider's dates.
-- Claude Skill matching step calls this after shortlisting candidates (not
-  for the whole 7000+ catalog), and prefers/flags candidates by availability
-  for the requested qty, instead of picking on text-match score alone.
+Shape: `GET /lookups/equipment-availability?typeId=&quantity=&dateFrom=&dateTo=&warehouseId=&clientId=&pricelistId=&userId=`
+— on-demand, one type per call, **not** part of the static
+`equipment-catalog-full`/`-changes` sync (availability is date-scoped and
+dynamic, unlike the mostly-static Hetype catalog). The Claude Skill calls
+this per shortlisted candidate during matching (not the whole 7000+
+catalog), after narrowing to a likely match — see `SKILL.md` Step 5.
 
 ## Implemented: Similars taxonomy + Composite/Alias kit + accessory awareness
 

@@ -16,24 +16,25 @@ description: >
 # HireTrack Rider Match
 
 You help match a touring collective's technical rider against the user's own **HireTrack NX**
-equipment inventory (not a vendor catalog — this is their own stock). The equipment catalog is
-read live from HireTrack's production database through a small service already running there;
-matched items can optionally be written into HireTrack as a **Note**.
+equipment inventory (not a vendor catalog — this is their own stock), checking real per-date
+availability along the way. The equipment catalog is read live from HireTrack's production
+database through a small service already running there; matched items can optionally be written
+into HireTrack as a **Note** or a **real booking** (see Hard rules).
 
 Full design background, schema decisions, and the reasoning behind the write path live in
 `EQUIPMENT_CATALOG_MATCH_BLUEPRINT.md` in the HireTrack project
 (`New project/Hiretrack/EQUIPMENT_CATALOG_MATCH_BLUEPRINT.md`) — read it if anything here is
 unclear or if the backend contract seems to have changed.
 
-## Known limitation (not yet fixed)
+## Availability-aware matching (2026-08-09)
 
-Matching currently only looks at the `Hetype` catalog text — it has **no visibility into physical
-stock or availability**. A candidate can be a perfect text match while having 0 physical units in
-`Item` (confirmed live: "Professional Music Stand" matched and got written to an eqlist despite 0
-stock, while a near-identical generic stand had ~206). Until date-aware availability is built (see
-"Planned" section in the blueprint doc), flag this explicitly to the user for any candidate you
-suspect might be low-stock/niche, and prefer a more generic/common alternative when one exists and
-fits the rider line just as well — don't rely on text-match score alone.
+Matching is **date-aware**: `scripts/check-availability.sh` calls HireTrack's own `api_v2`
+booking engine (`check_availability`), which computes real per-date-range availability
+server-side — `StocklevelForWarehouse` (total owned) and `AvailableQty` (free for the requested
+dates, accounting for overlapping bookings). This replaced an earlier text-only matcher that once
+picked a 0-stock "Professional Music Stand" over a near-identical ~206-unit alternative purely on
+text similarity — call this per shortlisted candidate (see Step 5) and use the real numbers, don't
+guess from stock text or skip the check for candidates that "look" common.
 
 ## Hard rules
 
@@ -42,16 +43,18 @@ fits the rider line just as well — don't rely on text-match score alone.
   endpoint doesn't even return them — brand/model live in the item's `name` (HireTrack
   `Hetype.Description`) as free text.
 - **Never write to HireTrack without showing the user the exact proposed lines first and getting
-  an explicit go-ahead.** The write step creates a real Note in production HireTrack.
-- **This skill's built-in write path (`scripts/create-note.sh`) only writes to a Note
-  (`Notebook`/`notebookdetails`).** Direct writes to a live Job's equipment list
-  (`EQLISTS`/`Sort`) have been proven to work (confirmed live, on a job created specifically for
-  testing — see "Live Eqlist (Sort) writes" in the blueprint doc for the working field template),
-  but that path isn't wrapped into this skill's scripts yet — it was done via ad-hoc Python against
-  the writable `Claude` DSN. If the user asks for a real Job's Eqlist to be written to directly,
-  don't attempt it ad hoc against a real booking without the same caution used when this was
-  tested — confirm it's safe to write to (not a real show), and read the blueprint's open questions
-  (totals recalculation, existing-sections case) first.
+  an explicit go-ahead.** Both write paths below create real data in production HireTrack.
+- **Two write paths, different weight — pick deliberately, don't default to the bigger one:**
+  - `scripts/create-note.sh` — writes a **Note** (`Notebook`/`notebookdetails`) only. Lightweight,
+    no Job/Eqlist created, safe default when the user just wants a written record of the match.
+  - `scripts/create-booking.sh` — creates a **real Job + Eqlist** via HireTrack's own `api_v2`
+    (`initialise_new_booking` + `append_to_booking` per line, confirmed live 2026-08-09: correct
+    pricing/discount from the client's price list, and a matching `delete_job` call cleanly
+    reverses it if needed). Use this only when the user explicitly wants an actual booking created,
+    not just a record — it needs a **real HireTrack client id** (`hiretrack_client_id` /
+    `Company.CompanyCounter`), which the skill must ask the user for rather than guess. Never point
+    this at a real client without the user confirming the dates/client are correct first — unlike a
+    Note, this is a live booking that shows up in the client's own job history.
 
 ## Configuration (ask the user once, then reuse)
 
@@ -91,6 +94,11 @@ Read the uploaded file. Delegate format handling to the existing `pdf`, `docx`, 
 as needed — don't reimplement file parsing here. Extract a flat list of line items: free-text
 description + quantity (default 1 if not stated). Don't try to pre-classify category/brand
 yourself yet — keep the raw text, matching happens next.
+
+Also extract the **event/show date range** if the rider states one (load-in/load-out, show dates,
+"Due Out"/"Due Back" wording). This drives the availability check in Step 5. If the rider doesn't
+state dates, ask the user for a date range before continuing — don't invent one or skip the
+availability check silently. Format as `"YYYY-MM-DD HH:MM:SS"` for the scripts below.
 
 ### Step 4 — Shortlist candidates
 
@@ -137,6 +145,16 @@ Each candidate the pre-filter returns carries `similarGroup`, `equipmentType`, a
    exception: when the rider names a **specific model** for one part (e.g. "TAMA Iron Cobra 900"
    pedal, "TAMA Round Rider XL Trio" throne) independent of the shell brand, honor that exact
    request rather than forcing it to match the shell brand.
+6. **Check real availability for the rider's dates** on your top 1-2 candidates per line once
+   you've narrowed to a likely match — not on every raw shortlist item, that's wasted calls:
+   ```bash
+   scripts/check-availability.sh <typeId> <quantity> "<dateFrom>" "<dateTo>"
+   ```
+   Returns `stocklevelForWarehouse` (total owned) and `availableQty` (actually free for those
+   dates). If `availableQty` is 0 or below the requested quantity, don't pick that candidate
+   silently — either fall back to a generic alternative that covers the qty, or flag the shortfall
+   to the user explicitly (e.g. "only 3 of 5 requested are free that week"). A perfect text/brand
+   match with insufficient availability is not a good match.
 
 Assign a confidence per line:
 
@@ -149,14 +167,16 @@ If a rider line clearly isn't equipment (headers, section titles, notes) skip it
 
 ### Step 6 — Present results
 
-Show a table: rider line → matched HireTrack item (`typeId` + name + category) → confidence,
-with unmatched/low-confidence items clearly separated at the bottom. This table is also the
-write-confirmation prompt — end by asking whether to create a HireTrack Note from the confirmed
-items.
+Show a table: rider line → matched HireTrack item (`typeId` + name + category) → availability for
+the rider's dates (`availableQty` / requested qty) → confidence, with unmatched/low-confidence and
+insufficient-availability items clearly separated at the bottom. This table is also the
+write-confirmation prompt — end by asking whether to write the confirmed items, and **which of the
+two write paths** the user wants (see Hard rules): a Note (record only) or a real booking (creates
+a Job + Eqlist — ask for the HireTrack client id if they choose this).
 
 ### Step 7 — Write (only after explicit confirmation)
 
-Build a payload file:
+**Option A — Note** (default, lighter-weight):
 
 ```json
 {
@@ -169,8 +189,6 @@ Build a payload file:
 }
 ```
 
-Only include lines the user confirmed. Then:
-
 ```bash
 scripts/create-note.sh /path/to/payload.json
 ```
@@ -178,3 +196,26 @@ scripts/create-note.sh /path/to/payload.json
 Report back the created `noteId` and how many lines were written (the response includes
 `failedLines` for any line that didn't insert — surface those explicitly, don't silently drop
 them).
+
+**Option B — real booking** (only if the user explicitly asked for an actual booking, and gave you
+a real `clientId`):
+
+```json
+{
+  "jobName": "Rider - <collective/job name>",
+  "clientId": 123,
+  "dateFrom": "<dateFrom from Step 3>",
+  "dateTo": "<dateTo from Step 3>",
+  "lines": [
+    { "typeId": 1234, "quantity": 2 },
+    { "typeId": 5678, "quantity": 1 }
+  ]
+}
+```
+
+```bash
+scripts/create-booking.sh /path/to/payload.json
+```
+
+Report back `jobId`/`jobRef`/`eqlistId`/`eqRef` and how many lines were written (`failedLines`
+same as above). Tell the user the job ref so they can open it directly in HireTrack NX.
