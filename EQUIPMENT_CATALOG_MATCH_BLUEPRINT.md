@@ -278,3 +278,14 @@ this section only covers how *this feature* exposes and uses them:
   dropdown (same pattern as the client search) — type a name, get matching
   job numbers to pick from, click one to open it via the exact-match
   lookup above.
+  **Nested Sections view with equipment-type badges (2026-08-09)**:
+  `job-lookup` also reads `Sort.sectionID` + `EqSections` (`SectionText`)
+  and `Hetype.EquipmentType` per line, so the existing-job equipment list
+  renders as a Section → line tree instead of a flat table, each line
+  tagged with a colored badge (Normal/Composite/Alias/Priced Alias/
+  Markup). Composite/Alias lines nest their real components underneath —
+  pulled from the catalog cache already loaded for the equipment search
+  (`state.catalogById` client-side, same `COMPOSIT` data used for rider
+  matching), no extra fetch. Verified against real data: Job `Р7167МСК`
+  has one section ("Default Section Header") and a genuine Composite line
+  (`Type 446`, "TC Electronic M6000") alongside plain lines.
