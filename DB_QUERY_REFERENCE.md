@@ -427,6 +427,20 @@ get the same inputs they always do.
   Out" FROM JOBS` works. Hit this on `JOBS."Due Out"/"Due Back"`,
   `Crew."Out"/"Back"`, `Crew_header."Function"` — assume any short/common
   English word used as a column name needs quoting.
+- **A parameterized string comparison combined with `(col IS NULL OR col =
+  FALSE)` in the same query raises `Type mismatch (nxtShortString <>
+  nxtBLOB)`**, even when the string column and the `IS NULL OR = FALSE`
+  column are unrelated. Confirmed live: `WHERE FullName = ? AND (Archived IS
+  NULL OR Archived = FALSE)` fails this way for every input tried, while the
+  identical `IS NULL OR = FALSE` clause with **zero** parameters works fine
+  (e.g. a plain `WHERE CREW = TRUE AND (Archived IS NULL OR Archived =
+  FALSE)` with no `?` at all), and `WHERE FullName = ? AND CREW = TRUE` (a
+  parameter with a plain equality, no `OR`/`IS NULL`) also works fine. NexusDB's
+  query engine appears to misinfer the bound parameter's type once an
+  `OR`/`IS NULL` boolean clause is present elsewhere in the `WHERE`. Fix:
+  filter what you can with plain equality in SQL, fetch the `IS NULL OR =
+  FALSE`-style column too, and filter it in application code afterward
+  instead of in the query.
 - **Cyrillic `CHAR` columns decode correctly with plain `cp1251`** —
   `conn.setdecoding(pyodbc.SQL_CHAR, encoding="cp1251")` and same for
   `SQL_WCHAR`. If you see `�`/`?` garbage in Cyrillic text, it is very
