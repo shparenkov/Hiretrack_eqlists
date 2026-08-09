@@ -335,8 +335,14 @@ action-specific params — see the article for the full param list, or
   requested `[availability_datetime_from, availability_datetime_to]` range) —
   no need to reimplement `Sort.Defcon`/`Whlevel` logic yourself for this.
   Pure inquiry, no side effects (`WriteResult.WriteAction: 0` = `bwaInquiryOnly`).
-- `initialise_new_booking` — creates a real Job + Eqlist + first line in one
-  call. Returns `JobID`/`JobRef`/`EqlistID`/`EqRef`.
+- `initialise_new_booking` — creates a real Job + Eqlist. **Despite taking
+  `hiretrack_type_id`/`quantity_required` params and being documented as
+  creating "the first line" too, that embedded line never actually persists
+  a `Sort` row on this server** — confirmed live by calling it alone (with
+  ample stock) and reading `Sort` immediately after: zero rows. Treat its
+  type/qty params as required-shape-only, not a real write; always follow
+  with `append_to_booking` for every line, including what would have been
+  the first. Returns `JobID`/`JobRef`/`EqlistID`/`EqRef`.
 - `append_to_booking` — adds one more line to an existing Eqlist (needs the
   `EqlistID` from `initialise_new_booking`). Returns real pricing
   (`PreDiscountPrice`/`DiscountedPrice`/`DiscountRate`, pulled from the
@@ -353,7 +359,12 @@ feature's original bad-match case) returned `StocklevelForWarehouse: 0`,
 `AvailableQty: 0`. `initialise_new_booking` + `append_to_booking` created
 real Job 7182/Eqlist 10647 under the dedicated "Test client"
 (`Company.CompanyCounter = 2` — use this for any experimentation, never a
-real client), then `delete_job` cleanly removed it.
+real client), then `delete_job` cleanly removed it. Also confirmed
+`append_to_booking` genuinely validates stock and refuses to write when
+`AvailableQty` goes negative for the requested dates/qty (`ValidationResult:
+7` = `bvrNoStockAvailable`, `BookingQty: 0`, no `Sort` row) — this is correct
+behavior, not a bug; don't mistake a real stock shortfall for a write
+failure.
 
 **Non-obvious gotcha: the doc mislabels HTTP methods.** It labels
 `check_availability` (and others) `GET` in the prose header, but its own
