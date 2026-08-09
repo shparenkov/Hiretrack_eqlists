@@ -246,8 +246,17 @@ this section only covers how *this feature* exposes and uses them:
   how the wireless-system matches in earlier rider tests were done, without
   the mechanism being understood at the time.
 
-## Consumer
+## Consumers
 
-A Claude Skill (`hiretrack-rider-match`, outside this repo) is the actual
-rider-parsing/matching/write-triggering client of this API. This repo only
-owns the read/write primitives above.
+- A Claude Skill (`hiretrack-rider-match`, outside this repo) is the
+  rider-parsing/matching/write-triggering client of this API. This repo only
+  owns the read/write primitives above.
+- **`/create-job/` page (2026-08-09)** — a manual, in-app alternative to the
+  skill, for when rider parsing/matching isn't needed (or is deliberately
+  deferred): client search (new `company-search` read operation, since
+  `initialise_new_booking` needs a real `Company.CompanyCounter`), date
+  range, equipment search over the same catalog cache with live per-line
+  `check_availability`, submits via `createHiretrackBooking`. Same
+  PIN-gate pattern as `/crew-bookings/` (`create-job-pin-auth.ts`,
+  `CREATE_JOB_PIN`) since it writes real Jobs/Eqlists. Source:
+  `backend/src/routes/create-job.ts`, `frontend-create-job/`.
