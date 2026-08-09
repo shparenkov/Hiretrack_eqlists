@@ -260,3 +260,16 @@ this section only covers how *this feature* exposes and uses them:
   PIN-gate pattern as `/crew-bookings/` (`create-job-pin-auth.ts`,
   `CREATE_JOB_PIN`) since it writes real Jobs/Eqlists. Source:
   `backend/src/routes/create-job.ts`, `frontend-create-job/`.
+- **"Open an existing job" mode (2026-08-09)**, same page — a mode toggle
+  switches from creating a new booking to looking up an existing one by
+  Job Ref (new `job-lookup` read operation: `Jobs` → `Eqlists` → `Sort`+
+  `Hetype`), shows what's already on it, and appends more equipment via
+  `appendLinesToExistingBooking`. Deliberately uses the target Eqlist's
+  own `DateOut`/`DateBack` (from the lookup) for every appended line
+  rather than asking the user to re-enter dates — `append_to_booking`
+  rejects any mismatch with `ValidationResult: 6`
+  (`bvrBookingDatesNEQListDates`), so this is not just a UX shortcut, it's
+  required for the write to succeed at all. Job Ref lookup is an exact
+  (trimmed) match, not case-insensitive — `UPPER()`/`LOWER()` don't fold
+  Cyrillic case in this NexusDB instance (confirmed live), and refs are
+  always copy-pasted from HireTrack NX's own display anyway.

@@ -512,6 +512,13 @@ get the same inputs they always do.
   Out" FROM JOBS` works. Hit this on `JOBS."Due Out"/"Due Back"`,
   `Crew."Out"/"Back"`, `Crew_header."Function"` — assume any short/common
   English word used as a column name needs quoting.
+- **`UPPER()`/`LOWER()` don't fold Cyrillic case** — `UPPER('Job_Ref') =
+  UPPER(?)` with a lowercase Cyrillic parameter silently matches nothing,
+  even though the exact-case value matches fine (confirmed live on
+  `Jobs.Job_Ref`). Works fine for Latin text (used successfully for
+  case-insensitive `Company.CompanyName` search). For Cyrillic-heavy
+  columns, prefer an exact/trimmed match, or `LIKE` with wildcards, over
+  relying on case-folding.
 - **Cyrillic `CHAR` columns decode correctly with plain `cp1251`** —
   `conn.setdecoding(pyodbc.SQL_CHAR, encoding="cp1251")` and same for
   `SQL_WCHAR`. If you see `�`/`?` garbage in Cyrillic text, it is very
