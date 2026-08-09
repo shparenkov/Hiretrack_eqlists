@@ -269,7 +269,12 @@ this section only covers how *this feature* exposes and uses them:
   rather than asking the user to re-enter dates — `append_to_booking`
   rejects any mismatch with `ValidationResult: 6`
   (`bvrBookingDatesNEQListDates`), so this is not just a UX shortcut, it's
-  required for the write to succeed at all. Job Ref lookup is an exact
-  (trimmed) match, not case-insensitive — `UPPER()`/`LOWER()` don't fold
-  Cyrillic case in this NexusDB instance (confirmed live), and refs are
-  always copy-pasted from HireTrack NX's own display anyway.
+  required for the write to succeed at all. Job Ref lookup itself is an
+  exact (trimmed) match, not case-insensitive — `UPPER()`/`LOWER()` don't
+  fold Cyrillic case in this NexusDB instance (confirmed live).
+  **Finding the Job Ref is interactive, though**: users know the client or
+  job name, not the ref, so a new `job-search` read operation
+  (`Job_Title`/`Name`/`Job_Ref` `LIKE`) powers a debounced type-ahead
+  dropdown (same pattern as the client search) — type a name, get matching
+  job numbers to pick from, click one to open it via the exact-match
+  lookup above.
