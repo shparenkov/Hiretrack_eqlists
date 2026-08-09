@@ -343,6 +343,26 @@ action-specific params — see the article for the full param list, or
   type/qty params as required-shape-only, not a real write; always follow
   with `append_to_booking` for every line, including what would have been
   the first. Returns `JobID`/`JobRef`/`EqlistID`/`EqRef`.
+  **Also confirmed: `availability_datetime_from`/`availability_datetime_to`
+  never reach the created Eqlist's actual `DateOut`/`DateBack` either.**
+  Root cause found in `db.sql`'s `CreateNewEqlist` function (the real
+  underlying stored function, which correctly accepts `aStartDate`/
+  `aEndDate`): it clamps to `CURRENT_TIMESTAMP` whenever the passed date is
+  earlier than "now" — `api_v2`'s `initialise_new_booking` action apparently
+  never forwards the date params to it at all, so this clamp always fires,
+  giving every new Eqlist `DateOut = now`, `DateBack = tomorrow 08:00`
+  regardless of what was requested. Every subsequent `append_to_booking`
+  call then fails with `ValidationResult: 6` (`bvrBookingDatesNEQListDates`)
+  since the line's dates don't match the Eqlist's real (wrong) header dates.
+  No `api_v2` action or stored procedure exists to change an Eqlist's dates
+  after creation — the only fix is a direct
+  `UPDATE Eqlists SET DateOut=?, DateBack=? WHERE Eql_no=?` via the writable
+  DSN, immediately after `initialise_new_booking` and before any
+  `append_to_booking` calls (`hiretrack_equipment_note_write.py`'s
+  `update-eqlist-dates` operation). Only two plain date columns — no
+  pricing/Sort/invoicing fields touched. Verified live end-to-end: both
+  header dates and all `Sort.D1`/`D2` values match the requested range, and
+  appends return `ValidationResult: 0`.
 - `append_to_booking` — adds one more line to an existing Eqlist (needs the
   `EqlistID` from `initialise_new_booking`). Returns real pricing
   (`PreDiscountPrice`/`DiscountedPrice`/`DiscountRate`, pulled from the
