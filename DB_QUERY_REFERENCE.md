@@ -363,6 +363,18 @@ action-specific params — see the article for the full param list, or
   pricing/Sort/invoicing fields touched. Verified live end-to-end: both
   header dates and all `Sort.D1`/`D2` values match the requested range, and
   appends return `ValidationResult: 0`.
+  **Further finding (2026-08-09, same investigation): the `CURRENT_TIMESTAMP`
+  clamp value carries full microsecond precision, and `append_to_booking`
+  rejects a date match against ANY stored `DateOut`/`DateBack` with a
+  fractional second at all** — confirmed by sending the request with the
+  exact same microsecond precision as the stored value (still rejected) and
+  with the precision stripped from the request only (still rejected); only
+  overwriting the *stored* value with a clean whole-second `UPDATE` fixed
+  it. So a Job/Eqlist created before this whole fix was deployed stays
+  permanently broken for appends until its stored dates are corrected —
+  `hiretrack-job-lookup.ts`'s `lookupHiretrackJob` now detects this (the
+  raw `.isoformat()`-serialized date contains `.`) and self-heals it via
+  the same `update-eqlist-dates` path the first time the job is opened.
 - `append_to_booking` — adds one more line to an existing Eqlist (needs the
   `EqlistID` from `initialise_new_booking`). Returns real pricing
   (`PreDiscountPrice`/`DiscountedPrice`/`DiscountRate`, pulled from the
