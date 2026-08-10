@@ -294,6 +294,18 @@ client**. Fix: insert an `EqSections` row first (or reuse an existing
 -- 1. section (skip if reusing an existing sectionID)
 INSERT INTO EqSections (SectionText, xEqlno, sortOrder) VALUES (?, ?, ?);
 -- new idx via: SELECT LASTAUTOINC FROM #dummy
+-- Full EqSections column list (confirmed live via cur.columns(), 2026-08-10):
+-- idx INTEGER (LASTAUTOINC, same pattern as CreateNewNote), SectionText CHAR(255),
+-- xEqlno INTEGER, sortOrder FLOAT (not an int - existing rows use 1.0, 2.0, ...;
+-- append a new section with MAX(sortOrder)+1), xSectionType WORD, xSectionCategory
+-- INTEGER, Budget MONEY, Notes TEXT - all nullable except what you supply, so a
+-- plain 3-column insert (xEqlno/SectionText/sortOrder) is enough. Rename is a plain
+-- UPDATE EqSections SET SectionText = ? WHERE idx = ?. Delete: Sort.sectionID
+-- accepts NULL (confirmed live) - UPDATE Sort SET sectionID = NULL WHERE
+-- sectionID = ? AND Eqlno = ? before DELETE FROM EqSections WHERE idx = ?, so
+-- lines in a deleted section land in "no section" instead of pointing at a
+-- vanished row. All three verified live on a throwaway section on Eqlist 10653
+-- (Р7167МСК test job) before shipping - created, renamed, then cleanly deleted.
 
 -- 2. line - pull Defcon/Subhire/ListType/MainSite->Slink1/Int1->Slink2(0 if NULL)/
 --    DateOut->D1/DateBack->D2 from the destination Eqlists row; Category->Xcat/

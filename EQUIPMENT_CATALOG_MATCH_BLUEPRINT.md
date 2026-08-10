@@ -363,3 +363,30 @@ this section only covers how *this feature* exposes and uses them:
   stepper clicks now produce exactly one PUT request and leave the tree
   container's own DOM node untouched (only the edited line's text/class
   updated).
+  **Availability formula simplified, component qty format fixed, section
+  CRUD added (2026-08-10, later same day)**: the `rawAvailableQty +
+  line.qty` "headroom" calc above was replaced at the user's request with a
+  much simpler figure — just `stocklevelForWarehouse - line.qty` (active
+  stock in the warehouse minus what this job itself has booked for this
+  line), deliberately ignoring what other jobs have booked. Displayed as a
+  single signed remainder (e.g. `-2`) instead of `X / Y`: green when
+  positive, yellow at exactly zero, red with its sign when negative — still
+  never blocking entry of a quantity larger than what's shown. Also: nested
+  Composite/Alias component lines now read `1 × Name` (quantity first, not
+  `×1 Name`). Bigger addition: full CRUD for `EqSections` from the
+  existing-job tree — rename inline (pencil icon, commits on blur/Enter,
+  Escape cancels), create (a "+ Добавить секцию" control always at the
+  bottom of the tree), and delete (native `confirm()` warning first, since
+  it's a real production row). Every known section now renders even with
+  zero lines (previously a section with no lines was skipped entirely,
+  which would have hidden a freshly-created empty section). Deleting a
+  section reassigns its lines to "no section" (`Sort.sectionID = NULL`)
+  rather than leaving them pointing at a deleted row. Three new write
+  operations (`rename-section`/`create-section`/`delete-section`) added to
+  the Python write bridge + Node wrapper + routes, live-verified against a
+  throwaway section created and deleted on the real `Р7167МСК` test job
+  before shipping: `EqSections.idx` is `LASTAUTOINC`, same pattern as
+  `CreateNewNote`; `sortOrder` is a plain `FLOAT` (new sections append after
+  the current max); `Sort.sectionID` accepts `NULL`. No leftover test data
+  — the throwaway section was renamed, then deleted, confirming all three
+  operations before the real feature was built.
