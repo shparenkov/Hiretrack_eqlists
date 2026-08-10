@@ -289,3 +289,14 @@ this section only covers how *this feature* exposes and uses them:
   matching), no extra fetch. Verified against real data: Job `Р7167МСК`
   has one section ("Default Section Header") and a genuine Composite line
   (`Type 446`, "TC Electronic M6000") alongside plain lines.
+  **Edit quantity / remove a line (2026-08-09)**: `job-lookup` also reads
+  `Sort.Lineref` per line (the same id `append_to_booking` returns as
+  `LineRefID`), so each line in the tree has an editable qty input and a
+  Remove button, wired to two more `api_v2` actions —
+  `change_booking_quantity` and `remove_from_booking` — both wrapped with
+  the same `ValidationResult` check as the rest of the booking-write path.
+  Only top-level lines (real `Sort` rows) are editable; nested Composite/
+  Alias component rows stay read-only, since they're catalog metadata, not
+  separate bookable lines. Verified live: changed a line's qty (confirmed
+  correct pricing recalculation) then removed it, confirmed gone via a
+  direct `Sort` read.

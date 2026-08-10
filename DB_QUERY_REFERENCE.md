@@ -379,10 +379,19 @@ action-specific params — see the article for the full param list, or
   `EqlistID` from `initialise_new_booking`). Returns real pricing
   (`PreDiscountPrice`/`DiscountedPrice`/`DiscountRate`, pulled from the
   client's actual price list).
-- `change_booking_quantity`, `change_booking_line_discount`,
-  `remove_from_booking`, `delete_job` — found in the doc, not yet exercised
-  live except `delete_job` (used to clean up a test booking, confirmed
-  working).
+- `change_booking_quantity` — PUT, params `hiretrack_user_id`/
+  `hiretrack_client_id`/`lineref_id`/`quantity_required`. Targets
+  `Sort.Lineref` (the same id `append_to_booking` returns as `LineRefID`).
+  Confirmed live (2026-08-09): changes the quantity and recalculates
+  pricing correctly, `WriteAction: 6` (`bwaChangeQty`), `ValidationResult: 0`.
+- `remove_from_booking` — PUT, params `hiretrack_user_id`/
+  `hiretrack_client_id`/`lineref_id`/`jobref_id`. **`jobref_id` here is the
+  numeric `JobID`/`Jobs.JobNo`, not the string `Job_Ref`** despite the
+  name. Confirmed live: deletes the `Sort` row entirely (verified via a
+  direct read afterward — 0 rows for that `Lineref`), `ValidationResult: 0`.
+- `change_booking_line_discount`, `delete_job` — `delete_job` confirmed
+  working (used repeatedly to clean up test bookings); `change_booking_line_discount`
+  found in the doc, not yet exercised live.
 
 **Confirmed live (2026-08-09):** `check_availability` against `Type 1203`
 (healthy stock) returned `StocklevelForWarehouse: 141`, `AvailableQty: 130`
