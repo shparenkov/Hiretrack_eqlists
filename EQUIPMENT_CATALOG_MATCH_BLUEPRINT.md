@@ -684,3 +684,45 @@ this section only covers how *this feature* exposes and uses them:
   two added sales-class items: searching "Кабель" matched all rental cable
   items with their N badge shown, and neither sales item appeared in results
   or triggered an availability call.
+  **Composite component quantity wrong + duplicate-type lines vanishing
+  (2026-08-11)**: two bugs reported together, root-caused to the same bug in
+  the nested Composite/Alias rendering. The old code built a single
+  `Map<typeId, line>` from a section's lines (last one wins on a duplicate
+  key) to find each declared component's real Sort row, and hid every line
+  whose typeId appeared anywhere in that map as a component - so a section
+  containing two real lines of the same type (one genuinely the Composite's
+  own component, one an unrelated separate booking of the same equipment)
+  picked an arbitrary one for the nested quantity and silently dropped the
+  other from the tree entirely. Confirmed live against production: type
+  623's recipe is 2x`569` (EK2000) + 1x`605` (SR2050); a real Job (Eqlist 22,
+  composite booked qty 4) has the correctly-generated component rows
+  (569x8, 605x4 - exactly recipe x qty) but ALSO an unrelated standalone 569
+  line (qty 2) sitting in the same section - the old Map picked whichever of
+  the two 569 lines it iterated last, sometimes showing the wrong nested
+  quantity and always hiding the other one. Checked across all 183 real
+  type-623 bookings in production: 175 have exactly one quantity-exact match
+  per component (`component.quantity * this composite's own booked qty`),
+  only 8 are ambiguous. `Sort` has no DB-level link between a Composite's
+  own row and its component rows (confirmed against `db.sql`'s schema - no
+  MasterLineRef-style column), so exact-quantity match is the only usable
+  signal.
+  Fixed with `computeComponentMatches(sectionLines)`: for each
+  Composite/Alias line, claims at most one sibling line per declared
+  component - only when its quantity exactly equals the expected count -
+  and returns a per-line `Map<componentTypeId, matchedLine|null>` plus the
+  set of claimed line objects (not typeIds) to skip when rendering
+  standalone rows. An ambiguous component (no exact match) now falls back to
+  the catalog recipe's own number (`component.quantity * this line's own
+  qty` - previously the fallback never multiplied by the composite's own
+  booked qty at all, always showing the bare per-unit recipe number) and
+  leaves every real line of that type visible as its own row, instead of
+  guessing wrong and hiding data. Applied consistently in the three places
+  that used to build their own ad hoc `linesByType` map: full section
+  render, the single-section seamless re-render (line remove/qty edit), and
+  the seamless single-line insert. Verified in-browser against a mock
+  reproducing the exact production scenario (composite 623 qty 4, a
+  correctly-matching 569/605 pair, plus a stray unrelated 569 line, plus two
+  separate identical standalone lines of another type): nested view showed
+  8xEK2000/4xSR2050 (not the wrong number), the stray 569 line rendered on
+  its own, both duplicate standalone lines rendered separately, and deleting
+  one of the two duplicates left the other one untouched in the tree.
