@@ -637,3 +637,29 @@ this section only covers how *this feature* exposes and uses them:
   (confirmed via a direct `Sort` read), then restored it to 3 - proving
   the whole detect-then-override sequence works against production, not
   just the isolated raw-SQL mechanism.
+  **Section delete now deletes its equipment too (2026-08-10, later same
+  day)**: the section-CRUD fix above deliberately reassigned a deleted
+  section's lines to "no section" (`Sort.sectionID = NULL`) rather than
+  removing them, on the assumption that was the safer default. User flagged
+  this as wrong - deleting a section should delete the equipment in it, not
+  orphan it into an unsectioned bucket. Fixed on the frontend: the delete
+  handler now loops over every line whose `sectionId` matches (this also
+  correctly picks up a Composite/Alias's absorbed component lines, since
+  those are still real separate `Sort` rows in the same section - see the
+  "Composite double-displayed" fix above), calling the same
+  `remove_from_booking`-backed per-line DELETE endpoint the standalone "×"
+  button already uses (proper delete, not a raw SQL removal), and only
+  deletes the `EqSections` row itself once every line has been confirmed
+  removed. If any line fails partway, the section is left in place (not
+  deleted) with whatever lines already succeeded reflected in the UI, so a
+  partial failure never silently loses a section along with a line still
+  stuck on it. The confirm dialog now names the equipment count ("вместе с
+  оборудованием в ней (N поз.)"). The `delete-section` write op's old
+  `UPDATE Sort SET sectionID = NULL` stays in the Python bridge as a safety
+  net only - normally there's nothing left for it to reassign by the time
+  it runs, since the frontend loop already removed every line first.
+  Verified in-browser against a mock server mirroring the real endpoint
+  shapes: deleting a section with a plain line, a Composite parent, and its
+  3 absorbed components fired 5 line DELETEs then the section DELETE, in
+  that order, and removed all of it from the DOM while leaving the other
+  section untouched.
