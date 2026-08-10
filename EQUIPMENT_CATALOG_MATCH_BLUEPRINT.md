@@ -663,3 +663,24 @@ this section only covers how *this feature* exposes and uses them:
   3 absorbed components fired 5 line DELETEs then the section DELETE, in
   that order, and removed all of it from the DOM while leaving the other
   section untouched.
+  **Equipment-search badges + sales-class exclusion (2026-08-10, later same
+  day)**: two related gaps in the per-section search widget
+  (`buildSectionAddWidget`). (1) Search result rows only showed a name and
+  an availability figure - no `typeBadgeHtml` call at all, unlike the tree
+  view - so a Composite/Alias/Consumable item looked identical to a Normal
+  one until it was actually added. Fixed by calling the same
+  `typeBadgeHtml(item.equipmentType, item.class)` helper already used for
+  tree lines. (2) `Hetype.Class` 2 (`ecNewSales`) and 3
+  (`ecExRentalSales`) - stock the business sells rather than rents out -
+  were never excluded from search, so sales items were selectable and
+  bookable onto a job like any rental item. Fixed with a `SALES_CLASSES =
+  new Set([2, 3])` filter applied in `getMatches` before the text-match
+  filter, so those items never appear as a result and never trigger an
+  availability fetch. Deliberately scoped to the search filter only -
+  `state.catalog`/`state.catalogById` keep every item (sales-class included)
+  since those are still needed for the throwaway `placeholderTypeId` used by
+  new-job-shell creation and for tree-line/component badge lookups on lines
+  a job may already carry. Verified in-browser against a mock catalog with
+  two added sales-class items: searching "Кабель" matched all rental cable
+  items with their N badge shown, and neither sales item appeared in results
+  or triggered an availability call.
