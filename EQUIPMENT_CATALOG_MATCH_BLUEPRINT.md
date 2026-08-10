@@ -300,3 +300,14 @@ this section only covers how *this feature* exposes and uses them:
   separate bookable lines. Verified live: changed a line's qty (confirmed
   correct pricing recalculation) then removed it, confirmed gone via a
   direct `Sort` read.
+  **Fixed double-display of a Composite's own components (2026-08-09)**:
+  a Composite/Alias line's declared `COMPOSIT` components often *also*
+  exist as their own separate `Sort` rows in the same section (for stock
+  tracking) — confirmed live on `Р7167МСК`: `Type 446`'s real recipe
+  (447/448/449) exactly matches three other lines already on the same
+  job. These were rendering twice (standalone AND nested under the
+  Composite). Fixed: a top-level line is now skipped and shown only
+  nested under its parent Composite/Alias if its `typeId` matches one of
+  that Composite's declared components within the same section — using
+  the real persisted line's quantity (more authoritative than the
+  catalog recipe's default) when a match exists.
