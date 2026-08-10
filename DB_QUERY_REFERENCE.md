@@ -224,6 +224,16 @@ Beyond the plain `Hetype`/`category` pair, four more things shape how a
   distribution: 2203/85/9/11. A rider/order line that describes a "pair",
   "system", or "package" often already exists as one of these bundled types
   — check before assembling components by hand.
+- **`Hetype.Class`** (`BYTE`, needs `CAST(... AS SMALLINT)`) is a
+  *separate* axis from `EquipmentType`: `TEquipmentClass = (ecRental,
+  ecConsumable, ecNewSales, ecExRentalSales)` — `0`=rental stock (the
+  normal case), `1`=consumable, `2`=new sales, `3`=ex-rental sales.
+  Confirmed live via `"#Fields"."FIELD_DESC"` (`TABLE_NAME`/`FIELD_NAME`
+  columns, not `"Table Name"`/`"Field Name"`) for `Hetype`/`Class` =
+  `"ecRental, ecConsumable, ecNewSales,ecExRentalSales (0..3)"`,
+  cross-checked against live distinct-value counts: 0→1906, 1→186, 2→75,
+  3→142. Used by `stocktakes-app`'s create-job page to badge Consumable
+  lines distinctly from Normal ones (2026-08-10).
 - **`Similars`** (`db.sql:4114`, `IDX`/`Name`) + `Hetype.xSimilar` group
   equipment into a curated ~48-category functional taxonomy — e.g. "Микрофон
   вокальный" (13 members), "Дибокс" (15), "Тарелка крэш" (30), "Рэк том"

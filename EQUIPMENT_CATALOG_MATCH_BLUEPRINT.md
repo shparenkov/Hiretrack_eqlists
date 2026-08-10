@@ -311,3 +311,25 @@ this section only covers how *this feature* exposes and uses them:
   that Composite's declared components within the same section — using
   the real persisted line's quantity (more authoritative than the
   catalog recipe's default) when a match exists.
+  **Letter badges, reordered layout, availability column (2026-08-10)**:
+  the full-word type badges (Normal/Composite/Alias/Priced Alias/Markup)
+  became single-letter badges — N/C/A/M, plus a new **C = Consumable**
+  category sourced from `Hetype.Class` (not `Hetype.EquipmentType` — a
+  separate axis; confirmed live via `"#Fields"."FIELD_DESC"` for
+  `TABLE_NAME='Hetype', FIELD_NAME='Class'` = `"ecRental, ecConsumable,
+  ecNewSales, ecExRentalSales (0..3)"`, cross-checked against live
+  distinct-value counts: 0→1906, 1→186, 2→75, 3→142 rows). `Class` is now
+  plumbed through `job-lookup`'s `Sort`/`Hetype` join alongside
+  `EquipmentType`. Badge colors: Composite = mustard yellow, Alias = dark
+  green, Consumable = magenta; Priced Alias folds into the Alias letter/
+  color, Markup keeps the neutral/gray styling. Each line's layout is now
+  badge → qty → name → availability → remove, with the internal Type ID
+  no longer displayed and the "Удалить" text button replaced by a plain
+  red "×". A new per-line availability column shows compact
+  `свободно / всего` (e.g. `137 / 141`), fetched asynchronously per line
+  against `GET /api/create-job/availability` using the job's own
+  `dateFrom`/`dateTo` — colored the same ok/low/none as the new-booking
+  staging table's availability badges. Verified against a local mock of
+  `/api/create-job/catalog` + `/jobs/:jobRef` + `/availability` covering
+  a Normal, Composite (with absorbed components), Alias (0 available),
+  and Consumable line, rendered correctly in-browser before deploying.
