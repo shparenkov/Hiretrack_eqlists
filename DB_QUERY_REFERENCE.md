@@ -306,6 +306,14 @@ INSERT INTO EqSections (SectionText, xEqlno, sortOrder) VALUES (?, ?, ?);
 -- lines in a deleted section land in "no section" instead of pointing at a
 -- vanished row. All three verified live on a throwaway section on Eqlist 10653
 -- (Р7167МСК test job) before shipping - created, renamed, then cleanly deleted.
+-- Moving an EXISTING line to a different section (also just a plain UPDATE,
+-- confirmed live 2026-08-10 - moved a real line then moved it back):
+-- UPDATE Sort SET sectionID = ? WHERE Lineref = ? AND Eqlno = ?;
+-- Needed because api_v2's append_to_booking has no section parameter at all -
+-- a freshly appended line lands wherever HireTrack itself decides (observed
+-- live: an auto-created "Warehouse Added Equipment" section), so moving it
+-- into the right section is always a separate follow-up write, never part of
+-- the append call itself.
 
 -- 2. line - pull Defcon/Subhire/ListType/MainSite->Slink1/Int1->Slink2(0 if NULL)/
 --    DateOut->D1/DateBack->D2 from the destination Eqlists row; Category->Xcat/

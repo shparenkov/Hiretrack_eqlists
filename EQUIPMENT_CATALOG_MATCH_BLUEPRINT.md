@@ -390,3 +390,41 @@ this section only covers how *this feature* exposes and uses them:
   the current max); `Sort.sectionID` accepts `NULL`. No leftover test data
   — the throwaway section was renamed, then deleted, confirming all three
   operations before the real feature was built.
+  **Per-section equipment entry, replacing the shared staging table
+  (2026-08-10, later same day)**: for existing-job mode, the single
+  "Добавить оборудование" card (search + staging table + batch submit
+  button, shared with new-job creation) was replaced by a small widget at
+  the top of every section — search input + inline qty, no staging step,
+  Enter/click adds the line immediately. New-job creation keeps the old
+  shared flow unchanged (no sections exist before a job is created), so
+  `#equipment-card`/`.submit-card` are now simply hidden whenever
+  `state.mode === 'existing'`.
+  **Section-targeted appends needed a new write op**: `api_v2`'s
+  `append_to_booking` has no section parameter at all — a freshly appended
+  line lands wherever HireTrack itself decides (observed live: an
+  auto-created "Warehouse Added Equipment" section), regardless of which
+  section's widget the user actually searched from. Fixed with
+  `set-line-section` (`UPDATE "Sort" SET "sectionID" = ? WHERE "Lineref" =
+  ? AND "Eqlno" = ?`), called right after a successful append whenever the
+  line carries a `sectionId`. Live-verified end-to-end via the real write
+  bridge script (not just ad-hoc SQL) on the `Р7167МСК` test job: moved a
+  real line (251791) from section 17291 to 17293, confirmed via a direct
+  `Sort` read, then moved it back to restore the original state.
+  `appendLinesToExistingBooking`'s line type gained an optional
+  `sectionId`, threaded through from the `/jobs/:jobRef/lines` route.
+  **Search UX**: each per-section widget filters the already-cached
+  catalog client-side (same substring match as the old shared search),
+  shows availability directly on each result row in compact `X/Y` form
+  (fetched as the dropdown opens, keyed to a per-search token so a fast
+  typist's stale in-flight fetches never overwrite a newer search's
+  results), and supports `ArrowUp`/`ArrowDown` to move a highlighted row
+  plus `Enter` to add the highlighted (or, if none highlighted yet, the
+  top) result — mouse users can also click a row directly. After a
+  successful add, the tree reloads and refocuses that same section's
+  search box, so entering a run of items stays a tight type → Enter →
+  type → Enter loop without the cursor jumping away. Verified in-browser:
+  typing "Кабель" surfaced 4 matches with availability filled in
+  immediately, two `ArrowDown` presses highlighted the correct (second)
+  row, `Enter` added it with the qty typed into the inline field, it
+  appeared in the correct section with the correct self-aware remainder,
+  and focus returned to that section's own search box afterward.
