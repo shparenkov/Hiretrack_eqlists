@@ -428,3 +428,66 @@ this section only covers how *this feature* exposes and uses them:
   row, `Enter` added it with the qty typed into the inline field, it
   appeared in the correct section with the correct self-aware remainder,
   and focus returned to that section's own search box afterward.
+  **Availability caching, nested qty field, seamless line insert
+  (2026-08-10, later same day)**: the per-search "fetch every visible
+  result's availability" approach above still re-fetched the same typeId
+  every time it reappeared across refined/re-typed search queries — the
+  user flagged this as unnecessary database load. Replaced with a
+  per-loaded-job client-side cache (`state.availabilityCache`, `Map<typeId,
+  {availableQty, stocklevelForWarehouse}>`), which also caches in-flight
+  promises so concurrent requests for the same typeId (e.g. several result
+  rows resolving at once) share one fetch instead of each firing its own.
+  A single `getAvailability(typeId, loadedJob)` helper now backs the tree's
+  per-line remainder, every search result row, and newly-inserted lines -
+  the cache is reset only when a genuinely different job is opened (dates
+  can differ), never on a same-job add/search. This is a deliberately
+  narrower scope than a literal "preload the whole multi-thousand-item
+  catalog upfront" reading of the request would have been - that would
+  mean thousands of individual `api_v2` HTTP calls before the page is even
+  usable (no bulk endpoint exists to do this in one query without
+  re-implementing HireTrack's own availability logic, which risks getting
+  subtly wrong). The chosen "fetch once per typeId per job, reuse forever"
+  approach directly addresses the stated problem (redundant re-fetching)
+  without that risk or the wait.
+  Second change: the qty field moved from a separate box next to the
+  search input into one shared bordered box with it (`.section-add-box`,
+  qty inset on the right, no individual borders on either input) - visibly
+  "nested inside" rather than beside.
+  Third: the keyboard flow now matches the user's described 4-step
+  sequence exactly - `ArrowUp`/`ArrowDown` moves the highlighted result
+  **and** shifts focus into the qty field (`.select()`'d, so the next
+  digits typed replace the default "1" outright), and `Enter` from
+  *either* field commits the highlighted (or top) result with whatever
+  qty is currently in that field. `ArrowUp`/`ArrowDown` keeps driving
+  result navigation even while focus is in the qty field (`preventDefault`
+  overrides the number input's native step-up/down), since the field is
+  for typing a quantity, not stepping one.
+  Fourth, the biggest structural change: adding a line no longer calls
+  `openExistingJob()` (full refetch + full tree rebuild) at all.
+  `appendLinesToExistingBooking`'s result gained a `writtenLines` array
+  (`{typeId, quantity, sectionId, lineRefId}` per successful write) so the
+  frontend can build the new line's DOM node directly - name/type/class
+  come from the already-loaded `state.catalogById` (the item was just
+  shown as a search result), availability comes from the cache described
+  above (already fetched for that same reason), so no network round-trip
+  is needed to display the new line at all. The line-rendering logic
+  itself was refactored into a shared `buildTreeLineNode()` (used by both
+  the full-section render and this single-line insert) so there's exactly
+  one implementation of what a tree line looks like. The new node is
+  `appendChild`'d as the last child of its section's container, which
+  places it after every existing line "for free" from DOM append order -
+  satisfying "add to the end" without any explicit sort logic on the
+  frontend.
+  Fifth, matching persisted order to what's shown: confirmed live
+  (`Sort.SortOrder` read on eqlists 10653/10655/10646) that
+  `append_to_booking` assigns a coarse, heavily-tied `SortOrder` (e.g. an
+  entire batch of appended lines all getting the same "2.0"), not a
+  per-line rank - a new line's actual position among its section's other
+  lines was whatever the SQL tie-break happened to produce, not reliably
+  last. `set-line-section` now also computes `MAX("SortOrder") WHERE
+  "Eqlno" = ? AND "sectionID" = ?` and sets the moved line's `SortOrder` to
+  that plus 1, in the same `UPDATE` that moves it into the section -
+  making "new lines sort last" durable across a future reload, not just
+  true for the current in-memory DOM. Live-verified on the `Р7167МСК` test
+  job (moved-then-restored a real line, confirmed the assigned SortOrder
+  each step) before shipping.

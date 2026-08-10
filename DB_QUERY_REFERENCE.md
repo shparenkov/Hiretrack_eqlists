@@ -314,6 +314,16 @@ INSERT INTO EqSections (SectionText, xEqlno, sortOrder) VALUES (?, ?, ?);
 -- live: an auto-created "Warehouse Added Equipment" section), so moving it
 -- into the right section is always a separate follow-up write, never part of
 -- the append call itself.
+-- Sort.SortOrder (FLOAT, like EqSections.sortOrder) is what orders lines
+-- within a section - confirmed live (2026-08-10, read across eqlists
+-- 10653/10655/10646) that append_to_booking assigns a coarse, heavily-tied
+-- value (e.g. every line in one appended batch getting the same "2.0"), not
+-- a per-line rank - so a fresh line's actual position among its section's
+-- other lines is whatever the SQL tie-break happens to produce, not
+-- reliably last. To make "new lines go to the end" durable, set-line-section
+-- also does UPDATE Sort SET SortOrder = (SELECT MAX(SortOrder) FROM Sort
+-- WHERE Eqlno = ? AND sectionID = ?) + 1 WHERE Lineref = ? AND Eqlno = ? in
+-- the same statement that moves the line into its target section.
 
 -- 2. line - pull Defcon/Subhire/ListType/MainSite->Slink1/Int1->Slink2(0 if NULL)/
 --    DateOut->D1/DateBack->D2 from the destination Eqlists row; Category->Xcat/
