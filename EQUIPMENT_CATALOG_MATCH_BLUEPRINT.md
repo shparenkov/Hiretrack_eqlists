@@ -609,3 +609,31 @@ this section only covers how *this feature* exposes and uses them:
   (no reload). Real production line 251771 is unaffected (still 3, as it
   was before and after the user's own test - the capped write to 13 that
   originally exposed this never actually changed anything, since 3→3).
+  **Overriding the cap entirely, per explicit follow-up instruction
+  (2026-08-10, later same day)**: the fix above correctly *reported* the
+  shortfall but still left the persisted quantity capped - the user then
+  said plainly that stock availability doesn't matter to them at all, the
+  quantity must always be exactly what they entered. Since api_v2 has no
+  parameter to opt out of its own cap, added a new write op
+  `force-line-quantity` (`UPDATE "Sort" SET "Quant" = ? WHERE "Lineref" = ?
+  AND "Eqlno" = ?` - `Quant` confirmed live as a plain `INTEGER`, no CAST/
+  BYTE quirk) called from inside both `appendToHiretrackBooking` and
+  `changeHiretrackBookingQuantity` themselves, right after each api_v2
+  call, whenever the returned `BookingQty` is below what was requested -
+  overwrites it with the true value and returns that as `bookingQty`
+  instead. Because both functions now guarantee `bookingQty === requested`
+  whenever the write succeeds at all, the "HireTrack applied only X of Y"
+  message from the previous fix simply stops firing on its own - no
+  frontend changes needed beyond threading `eqlistId` into
+  `ChangeBookingQuantityInput` (the force-write's `WHERE` clause needs it
+  as a safety scope; `change_booking_quantity` itself doesn't). Explicitly
+  does NOT touch `Daily`/`Price`/`PreDiscount`/`Discount`/`InvoicedTotal` -
+  those stay priced for whatever quantity api_v2 actually computed before
+  being overridden, so invoicing for the forced excess is not automatic
+  and may need manual adjustment in HireTrack NX for billed equipment.
+  Live-verified the *exact* combined flow end to end on line 251771 before
+  shipping: called the real `change_booking_quantity` (3→13, capped to
+  `BookingQty: 3` as before), the force-write then set it to the true 13
+  (confirmed via a direct `Sort` read), then restored it to 3 - proving
+  the whole detect-then-override sequence works against production, not
+  just the isolated raw-SQL mechanism.
