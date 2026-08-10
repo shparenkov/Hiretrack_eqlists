@@ -578,3 +578,34 @@ this section only covers how *this feature* exposes and uses them:
   → URL loses the param, loaded-job view hides, recent-jobs cards
   reappear, all without a page navigation → `history.forward()` re-opens
   the same job → a fresh page load at `?job=<ref>` opens it directly too.
+  **Silent quantity-cap bug found and fixed (2026-08-10, later same day)**:
+  user reported that changing a line's quantity above what's actually in
+  stock didn't stick - looked right in the browser, but HireTrack still
+  showed the old value, and a page refresh reverted the display too.
+  Root-caused live by calling `change_booking_quantity` directly (bypassing
+  the app) on a real line (251771, 3→13 with only 3 truly available):
+  `ValidationResult: 0` (success), `WriteAction: 6`, `RequestedQty: 13`,
+  but **`BookingQty: 3`** - HireTrack does not reject an over-quantity
+  request, it silently *caps* the persisted amount to what's available
+  while still reporting success. This is a distinct failure mode from the
+  already-known "HTTP 200 even on rejection" issue (fixed 2026-08-09,
+  `ValidationResult` check) - here `ValidationResult` genuinely is 0, so
+  that check alone can't catch it; only comparing `BookingQty` to what was
+  requested reveals the shortfall. The exact same field exists on
+  `append_to_booking`'s response too (same risk on the add-new-line path,
+  confirmed by inspection, not separately live-tested - the API shape is
+  identical). Fixed by using `BookingQty` (not the requested value)
+  everywhere a quantity gets echoed back to the UI:
+  `appendLinesToExistingBooking`'s `writtenLines[].quantity` now comes from
+  `result.bookingQty ?? line.quantity` (with the originally-requested value
+  kept alongside as `requestedQuantity` for comparison), and the frontend's
+  qty-edit and add-equipment handlers both now display the real persisted
+  number immediately and show `"HireTrack применил/добавил только X из
+  Y — недостаточно оборудования на складе на эти даты"` when it differs
+  from what was typed, instead of showing the typed value until the next
+  reload silently corrected it. Verified against a mock simulating the
+  exact cap behavior for both the qty-change and add-line paths - both now
+  show the correct number and message with zero further action needed
+  (no reload). Real production line 251771 is unaffected (still 3, as it
+  was before and after the user's own test - the capped write to 13 that
+  originally exposed this never actually changed anything, since 3→3).
