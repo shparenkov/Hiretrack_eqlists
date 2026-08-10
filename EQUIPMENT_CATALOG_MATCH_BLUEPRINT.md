@@ -333,3 +333,33 @@ this section only covers how *this feature* exposes and uses them:
   `/api/create-job/catalog` + `/jobs/:jobRef` + `/availability` covering
   a Normal, Composite (with absorbed components), Alias (0 available),
   and Consumable line, rendered correctly in-browser before deploying.
+  **Composite spoiler, qty-first components, self-aware availability
+  (2026-08-10)**: three follow-up fixes to the tree view. (1) The
+  Composite/Alias components list now shows quantity before the name
+  (`×1 M6000 - блок`, not the other way round). (2) That nested list is
+  now a collapsible spoiler — collapsed by default, a `▸`/`▾` toggle on
+  the parent line reveals it — instead of always being expanded. (3) The
+  per-line availability number is now self-aware: `check_availability`
+  has no notion of "this specific already-persisted line", so its raw
+  `AvailableQty` for a type/date range already has this job's own
+  currently-booked quantity for that line subtracted out along with
+  everyone else's overlapping bookings — naively displaying that raw
+  number makes a line look short on stock even when the shortfall is
+  entirely its own reservation. Fixed by displaying `rawAvailableQty +
+  line.qty` instead (the real headroom for growing this exact line), with
+  the ok/low/none color threshold changed to compare `rawAvailableQty`
+  against zero rather than the requested quantity against the raw number.
+  No artificial cap was ever added preventing a quantity higher than the
+  displayed number — increasing past it is allowed by the UI in either
+  case; HireTrack's own `change_booking_quantity` validation is the real
+  arbiter and any rejection still surfaces through the existing
+  `ValidationResult` error path. Separately, quantity edits via the
+  number input's native stepper arrows (each click fires its own
+  `change` event immediately) were debounced and switched from
+  "PUT then refetch+rebuild the whole tree" to "PUT then mutate state and
+  refresh just that line's own availability badge in place" — rapid
+  stepper clicks previously triggered a full tree rebuild per click
+  (visible flicker, lost focus); verified in-browser that two rapid
+  stepper clicks now produce exactly one PUT request and leave the tree
+  container's own DOM node untouched (only the edited line's text/class
+  updated).
