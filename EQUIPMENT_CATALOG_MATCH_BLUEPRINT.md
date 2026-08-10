@@ -557,3 +557,24 @@ this section only covers how *this feature* exposes and uses them:
   tracking). Clicking a card opens that job the same way a search result
   does. Hidden once a job is loaded, shown again on a failed lookup (so the
   user can pick a different recent job without re-typing).
+  **Back-button routing fix (2026-08-10, later same day)**: opening a job
+  never actually navigated anywhere (just a `fetch` + DOM update), so no
+  history entry existed for "a job is loaded" - the browser's own Back
+  button fell straight through to whatever page linked into `/create-job/`
+  (typically the portal), flagged by the user as wrong (should return to
+  the job list, not exit the page). Fixed with plain `history.pushState`:
+  `openExistingJob` now pushes a `?job=<ref>` URL on success (skipped when
+  re-entering via `popstate` itself, and when the URL already points at
+  that job, to avoid redundant entries from re-clicking the same result). A
+  `popstate` listener re-derives the job ref from `location.search` -
+  present means load that job (`pushHistory: false`, we're already at this
+  URL); absent means `closeLoadedJob()` (clear `state.loadedJob`, hide the
+  loaded-job view, reload the recent-jobs cards) without pushing anything
+  further. Since it's a query string on the same static `index.html`,
+  `express.static` serves it with no server-side route change needed, and
+  the same `?job=` on a fresh page load/refresh opens that job directly
+  (deep link support, previously impossible). Verified in-browser end to
+  end: open a job (`history.length` +1, URL gains `?job=`) → `history.back()`
+  → URL loses the param, loaded-job view hides, recent-jobs cards
+  reappear, all without a page navigation → `history.forward()` re-opens
+  the same job → a fresh page load at `?job=<ref>` opens it directly too.
