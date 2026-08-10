@@ -491,3 +491,69 @@ this section only covers how *this feature* exposes and uses them:
   true for the current in-memory DOM. Live-verified on the `Р7167МСК` test
   job (moved-then-restored a real line, confirmed the assigned SortOrder
   each step) before shipping.
+  **Seamless remove, modular search, new/existing-job unification, recent
+  jobs (2026-08-10, later same day)**: a large follow-up batch. (1)
+  Removing a line or a section used to call `openExistingJob()` (full
+  refetch + full tree rebuild), which also wiped `state.availabilityCache`
+  and re-fetched every OTHER line's availability for no reason - flagged
+  by the user as unnecessary load. Both now mutate state and re-render only
+  what changed: `removeExistingLine` rebuilds just the affected section
+  (`rerenderSectionLines`, using `loadedJob.existingLines` filtered by
+  section, so a Composite's absorption re-evaluates correctly if one of
+  its components was the line removed) instead of the whole tree;
+  `deleteSection`'s handler removes just that section's DOM node and
+  reassigns its lines into (creating, if needed) a "Без секции" bucket via
+  `refreshUnsectionedBucket`. Verified live in-browser: removing a line or
+  section fires only its own `DELETE` request, zero follow-up `GET
+  /jobs/:ref`, and zero new `/availability` calls for any untouched line.
+  (2) Extracted a generic `createSearchDropdown()` module (debounced
+  search-as-you-type, `ArrowUp`/`ArrowDown` highlight with an optional
+  `onHighlightChange` hook, `Enter` selects highlighted-or-top,
+  `Escape`/outside-click closes, mousedown-before-blur row selection) and
+  rebuilt job search, client search, and the per-section equipment search
+  on it - one engine instead of three separately-written ones. Job search
+  gained the same `ArrowUp`/`ArrowDown` navigation the equipment search
+  already had. Also unified the dropdown container CSS (`.dropdown-results`)
+  and result-row CSS (shared `.result-row`/`.highlighted`, previously
+  `.section-add-result-row` duplicated the same rules under a different
+  name).
+  (3) **New-job mode no longer has its own separate UI/flow.** Previously
+  it was a wholly different interface: name/dates/client fields, a shared
+  equipment-card with its own staging table (search → add to a local list
+  → edit qty inline → batch submit creates the Job+Eqlist+all-lines in one
+  `POST /bookings` call). Per explicit request ("иначе это два разных
+  entities... надо быть модульным и масштабируемым"), "Создать работу" now
+  *only* creates the Job+Eqlist header - a new `createHiretrackJobShell`
+  (`hiretrack-booking-api.ts`) + `POST /jobs` route, calling
+  `initialise_new_booking` with a throwaway `placeholderTypeId` (any
+  already-loaded catalog item - confirmed earlier this session that
+  `initialise_new_booking`'s own embedded line never persists a `Sort` row
+  regardless of what's passed, so the value has zero real effect, only
+  satisfies the API's required param shape) and skipping the
+  `append_to_booking` loop entirely (unlike `createHiretrackBooking`, which
+  still exists unchanged for other callers, e.g. the `hiretrack-rider-match`
+  skill's `create-booking.sh`). On success the frontend calls
+  `setMode('existing')` then `openExistingJob(newJobRef)` - the *exact*
+  same function a job-search result or a recent-job card click already
+  used - so the freshly created (empty) job immediately opens in the same
+  section-based tree editor as any existing job. The entire old shared
+  staging-table code path (`state.lines`, `addLine`/`removeLine`/
+  `renderLines`/`renderAvailabilityBadge`/`refreshAvailability`/
+  `searchEquipment`, the `#equipment-card`/`#lines-table` HTML) was deleted,
+  not just hidden. Verified live in-browser: filled the new-job form,
+  submitted, and landed in the tree editor showing the just-created job's
+  real ref/client/dates with an empty state - added a section and an
+  equipment line to it successfully through the normal per-section widget.
+  (4) **Recent jobs on the search page**: `Jobs.CreatedDate` (a real
+  `TIMESTAMP`, confirmed live via `cur.columns()`) backs a new `job-recent`
+  read op (`WHERE CreatedDate >= ?`, cutoff computed as a real `datetime`
+  server-side, default 7 days) → `listRecentHiretrackJobs()` →
+  `GET /jobs/recent` (registered *before* `GET /jobs/:jobRef` so "recent"
+  isn't swallowed as a job ref). Shown as cards below the job search box
+  whenever no job is loaded yet, styled after the Daybook (План склада)
+  page's `.job` card (white card, left accent border, soft shadow, bold
+  navy ref, muted meta line - card details in this session's exploration,
+  no progress-bar/expand since that's Daybook-specific equipment-return
+  tracking). Clicking a card opens that job the same way a search result
+  does. Hidden once a job is loaded, shown again on a failed lookup (so the
+  user can pick a different recent job without re-typing).

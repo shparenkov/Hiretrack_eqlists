@@ -44,6 +44,14 @@ Primary table:
 
 - `JOBS` at [db.sql](/C:/Users/shpar/OneDrive/Документы/New%20project/Hiretrack/db.sql:5441)
 
+`Jobs.CreatedDate` (TIMESTAMP, confirmed live via `cur.columns(table='Jobs')`,
+2026-08-10) is the row's actual creation timestamp - used for a "recently
+created jobs" list (`WHERE CreatedDate >= ?`, cutoff bound as a real
+`datetime`, not a string). Distinct from `ModifiedDate` (last edit) and from
+`"Due Out"`/`"Due Back"` (the job's own rental period, unrelated to when the
+record was created). `CreatedBy`/`ModifiedBy`/`ConfirmedBy` are all
+`users.uid` FKs.
+
 ## Status Codes (`defcon` lookup)
 
 `JOBS.Status`, `Crew.xStatus`, `Crew_header.xStatus`, and `EQLISTS.Defcon` all
