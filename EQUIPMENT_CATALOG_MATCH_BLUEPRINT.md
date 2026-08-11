@@ -925,3 +925,45 @@ session:
   back cache bug was caught and fixed before shipping. Deployed to
   production (`feature/api-v2-availability-booking`, commit `2f402a0`),
   service restarted healthy.
+
+  **Availability badges getting permanently stuck on large jobs, fixed
+  (2026-08-11, same session)**: user reported that on a real job (Eqlist
+  6807, 122 lines / 120 distinct equipment types), availability "just
+  stops updating" at some point. Root-caused live: HireTrack's own `api_v2`
+  gateway enforces a **global concurrency cap of its own** - firing all 120
+  of that job's `check_availability` calls concurrently (the tree does one
+  per distinct type, with zero throttling anywhere) got 112 of them back as
+  HTTP 503 `{"error":"Service temporarily unavailable","current_load":10,
+  "max_capacity":10,"retry_after":5}` the moment more than 10 were in
+  flight - and nothing anywhere retried them, so those lines' badges were
+  left on "?" permanently. This cap is global across everything hitting the
+  gateway (not per browser tab), so throttling only in the frontend
+  wouldn't be enough if multiple tabs/users were active at once - fixed
+  server-side instead, where one Node process funnels all of this app's
+  `api_v2` traffic. Added a simple counting-semaphore `ConcurrencyLimiter`
+  (capped at 4, well under the gateway's 10, leaving headroom for other
+  concurrent traffic - booking writes, other sessions) wrapping
+  `checkHiretrackAvailability`'s outbound call, plus a retry-on-503 helper
+  that honors the gateway's own `retry_after` hint (falls back to 1s if
+  absent). `requestJson`'s rejected `Error` was changed to a new
+  `HiretrackHttpError` subclass carrying the real status code + parsed body
+  (previously only stringified into the message), so the retry logic can
+  distinguish "worth retrying" from any other failure without string
+  parsing. Also skips fetching entirely for a line whose `Sort.Type` is
+  NULL (confirmed live: one row on this exact job) instead of burning a
+  queue slot on a request guaranteed to fail (HTTP 422, "'null' is not a
+  valid integer value"). Verified live end-to-end, twice: (1) the unfixed
+  code reproducibly failed 112/121 concurrent requests against this real
+  job; (2) the fixed code (compiled and run directly against production,
+  same technique as other live verifications this session) succeeded on
+  all 120 (excluding the null-type row), at a cost of ~45s total load time
+  for this specific 120-type job - an explicit, reasonable tradeoff over
+  silently-wrong/stuck data. **Noted as a follow-up, not implemented now**:
+  `check_availability` itself is inherently slow (observed 800ms-4s per
+  call even with zero contention), so a very large job will always take a
+  while to fully populate regardless of this fix; lazy-loading availability
+  only for visible/expanded sections (e.g. via `IntersectionObserver`)
+  would meaningfully cut the burst size for huge jobs and is worth
+  considering separately if this becomes a recurring pain point. Deployed
+  to production (`feature/api-v2-availability-booking`, commit `7f60eec`),
+  service restarted healthy.
