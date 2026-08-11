@@ -726,3 +726,71 @@ this section only covers how *this feature* exposes and uses them:
   8xEK2000/4xSR2050 (not the wrong number), the stray 569 line rendered on
   its own, both duplicate standalone lines rendered separately, and deleting
   one of the two duplicates left the other one untouched in the tree.
+
+## Roadmap (2026-08-11)
+
+User handed over a backlog of 15 further `/create-job/` items, analyzed and
+grouped into phases (bug fixes -> job-header completeness -> multi-Eqlist
+creation -> UI polish -> bigger analytical features). Phase 0 shipped this
+session:
+
+  **Phase 0 - Eqlist title bug + multi-Eqlist display (2026-08-11)**: two
+  confirmed-live bugs, fixed together since both touch `hiretrack-job-lookup.ts`/
+  the existing-job load path.
+  (1) **Eqlist title**: `CreateNewEqlist` (`db.sql:9143-9144`, the stored
+  function behind `initialise_new_booking`) always sets `Eqlists.Eql_Title`
+  itself to `Job_Title || ':' || Eql_name` (the short auto-generated
+  reference code, e.g. "5150 @ 10.08.2026:Р7170МСКАРНД01МСК") with no
+  parameter anywhere in `api_v2` to opt out - confirmed live across all 15
+  Eqlists created through `/create-job/` before this fix, every one showed
+  this redundant, ugly title. `Eql_name` itself (the short code) is a
+  separate field, left untouched - it follows the same auto-numbered
+  convention as `Job_Ref` and isn't what's shown as the list's name.
+  Fixed with a new write op `update-eqlist-title`
+  (`UPDATE "Eqlists" SET "Eql_Title" = ? WHERE "Eql_no" = ?`) called right
+  after `initialise_new_booking` on both job-creation paths
+  (`createHiretrackJobShell` for `/create-job/`, and `createHiretrackBooking`
+  for the `hiretrack-rider-match` skill's `create-booking.sh`), setting it
+  to the clean job name. Live-verified twice: (a) an isolated write/restore
+  on a real Eqlist (10650) confirmed the raw SQL works cleanly, no
+  NexusDB quirks for this plain `SHORTSTRING(30)`-adjacent `Eql_Title`
+  field; (b) a full end-to-end call to the deployed `createHiretrackJobShell`
+  (bypassing HTTP/auth by requiring the compiled service module directly
+  with the service's own env vars, same pattern as other live verifications
+  this session) created a real Job/Eqlist and confirmed `Eql_Title` came
+  back exactly `"CLAUDE TITLE FIX TEST - DELETE ME"` - no `:AutoCode` suffix.
+  Left under Test client for manual cleanup (no `delete_job` action exists
+  in `api_v2` - confirmed live, `"No item found with name \"delete_job\""` -
+  so the earlier session's own note about a job being "cleanly deleted via
+  delete_job" must have meant something else, not a real reusable action;
+  raw multi-table cascade delete wasn't attempted to avoid touching
+  `EqSections`/`Sort` without an established safe pattern for it).
+  (2) **Multi-Eqlist display**: `openExistingJob` hard-coded
+  `job.eqlists[0]`, even though `hiretrack-job-lookup.ts` already returned
+  every Eqlist on the job - every Eqlist past the first was silently
+  invisible. Confirmed live this is a common, real production pattern (one
+  job has 27 separate Eqlists, one per act on a multi-day booking; 1386
+  jobs in production have more than one). Fixed with an Eqlist picker
+  (`<select>`, shown only when a job has more than one Eqlist - the common
+  single-Eqlist case is visually unchanged) that switches the whole
+  ref/client/dates/tree view between them via a new `applyEqlist(job,
+  eqlist)` helper, labeled with the now-fixed `Eql_Title` + a compact date
+  range. `JOB_LOOKUP_EQLISTS_QUERY` extended to also select `Eql_Title`
+  (surfaced as `eqlistTitle`) and explicitly `ORDER BY Eql_no` so the
+  picker's option order is stable. Switching resets the availability
+  cache (a different Eqlist almost always means a different date range).
+  Verified in-browser against a mock 3-Eqlist job (mirroring the real
+  27-Eqlist production example): picker listed all three with clean
+  labels, switching correctly swapped dates/section/lines for each,
+  and the single-Eqlist case still hides the picker entirely (no
+  regression). Deployed to production (`feature/api-v2-availability-booking`,
+  commit `a10a702`), service restarted healthy.
+  **Remaining phases not yet started**: Phase 1 (default times per HireTrack
+  settings, default job type "Аренда", Sales Person/Handler
+  auto-set+picker, contact-person picker, default section name), Phase 2
+  (creating additional Eqlists on an existing job, building on this
+  session's display fix), Phase 3 (rectangular recent-job cards), Phase 4
+  (equipment occupancy table modeled on Crew Bookings, shortage-only jobs
+  view, jobs Gantt, accessory suggestions + Reminders). See the chat
+  history for the full phase breakdown and reasoning; not duplicated here
+  to avoid this doc drifting out of sync with the live discussion.
