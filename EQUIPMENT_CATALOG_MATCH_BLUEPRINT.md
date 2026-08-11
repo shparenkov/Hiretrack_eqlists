@@ -858,3 +858,70 @@ session:
   correctly against a job carrying 3 existing sections. Deployed to
   production (`feature/api-v2-availability-booking`, commit `bfc216e`),
   service restarted healthy.
+
+  **Phase 2 shipped (2026-08-11, same session)**: creating a further Eqlist
+  on an already-existing job, plus a skeleton for editing an Eqlist's own
+  dates after creation - user flagged mid-phase that Eqlists on the same
+  job can genuinely run on different dates from the job's own ("project")
+  dates, so both needed to be independently addressable, not just set once
+  at creation.
+  `api_v2` has no action at all for "add an Eqlist to an existing job" -
+  `initialise_new_booking` only ever creates a brand-new Job. Found the
+  underlying stored function it calls internally, `CreateNewEqlist`
+  (`db.sql:9015`), and called it directly via the writable DSN
+  (`{CALL CreateNewEqlist(aJobNo, aStartDate, aEndDate, aStatus=1,
+  aListType=0, aSourceWarehouse=0, aDestWarehouse=0, aBorrowingList=0,
+  aEqlistClass=0)}`) - new write op `create-eqlist`. Its own doc comment
+  says `aStatus`: "-1 for real jobs", but live-testing showed that literally
+  stores `Defcon=-1` (not a valid resolved status - real Eqlists show
+  `Defcon=1`, matching `Rules.DefaultEqlistStatus`), so `1` is passed
+  instead. **Its `LASTAUTOINC` can't be trusted** the way every other
+  `CreateNew*`-style write in this bridge relies on it (`CreateNewNote`,
+  `EqSections` inserts): confirmed live that reading `LASTAUTOINC` right
+  after the `{CALL ...}` returns an unrelated value (429551 - no such
+  `Eql_no` ever existed), because the function does several of its own
+  internal autoinc-generating inserts before it returns. Fixed by querying
+  "most recently created Eqlist for this Job" (`ORDER BY CreatedDate DESC`)
+  instead - confirmed reliable for this app's usage pattern (single
+  PIN-gated tool, no realistic concurrent-creation-on-the-same-job race).
+  Applies the same `Eql_Title` "Title:AutoCode" cleanup as the job's own
+  first Eqlist (confirmed the new Eqlist gets the identical bug).
+  **Date defaults, per the user's explicit follow-up**: `Jobs."Due Out"`/
+  `"Due Back"` is a genuine job-level date range, confirmed live to be
+  distinct from and NOT kept in sync with any individual Eqlist's own dates
+  (`CreateNewEqlist` copies the FIRST Eqlist's dates onto it when a job is
+  first created, but never touches it again for later Eqlists - a real
+  27-Eqlist job's `Due Back` still matched only its first Eqlist's end
+  date, weeks before the actual last one). `JOB_LOOKUP_QUERY` extended to
+  select it; the "+ Добавить список" form pre-fills both date fields from
+  it (falling back to the currently-shown Eqlist's own dates if the job has
+  none) but leaves them fully editable before submitting.
+  **Dates-edit skeleton**: `update-eqlist-dates` already existed
+  (used internally for the third-bug fix and legacy-job self-heal) but was
+  never exposed via a route - added `PUT
+  /jobs/:jobRef/eqlists/:eqlistId/dates` and a pencil-icon UI next to the
+  loaded Eqlist's dates readout, matching the existing section-rename UX
+  pattern. Deliberately **disabled once the Eqlist has real lines** -
+  changing header dates on a populated list isn't safe yet, since existing
+  lines' own `Sort.D1`/`D2` aren't updated to match, and any future append
+  would then fail HireTrack's exact-date match (the same mechanism behind
+  the third and fourth bugs fixed earlier this session) - a genuine
+  "skeleton for the future" as the user put it, not a complete feature;
+  reconciling existing lines' dates on an edit is deferred. A real
+  correctness bug was caught and fixed during in-browser verification:
+  saving new dates updated the live view but not the cached Eqlist-picker
+  list, so switching to a different Eqlist and back without a full reload
+  would have reverted the display to the pre-edit dates - fixed by also
+  updating `state.loadedJobEqlists`' matching entry and its `<option>` text
+  on a successful save.
+  Both new write ops verified live end-to-end against the deployed
+  production service before wiring into the UI (create then immediately
+  re-date a real new Eqlist on the `Р7179МСК` test job, confirmed via a
+  direct `Sort`/`Eqlists` read: correct title, correct final dates, correct
+  `Defcon`). Frontend verified in-browser: default dates matched the mock
+  job's own `dueOut`/`dueBack` exactly, the picker and tree correctly
+  switched to a freshly created Eqlist, the pencil button was disabled for
+  a populated Eqlist and enabled for an empty one, and the switch-away-and-
+  back cache bug was caught and fixed before shipping. Deployed to
+  production (`feature/api-v2-availability-booking`, commit `2f402a0`),
+  service restarted healthy.
