@@ -967,3 +967,22 @@ session:
   considering separately if this becomes a recurring pain point. Deployed
   to production (`feature/api-v2-availability-booking`, commit `7f60eec`),
   service restarted healthy.
+
+  **Availability loading progress bar (2026-08-11, same session)**: direct
+  follow-up - with the fix above, a large job's availability now reliably
+  finishes but can still take real time (the ~45s example), during which
+  it previously looked like a silent pile of "…" badges with no sense of
+  whether anything was still happening. Added `state.availabilityProgress
+  = { total, done }`, incremented/decremented inside `getAvailability`
+  itself (via a `.finally()` on the fetch chain, so it tracks every real
+  cache-miss fetch regardless of caller - tree lines, search results,
+  newly-inserted lines - without duplicating bookkeeping at each call
+  site) and reset alongside `state.availabilityCache` everywhere that was
+  already cleared (Eqlist switch, dates-edit save, opening a job). Renders
+  as a small bar + "done / total" count near the top of the loaded Eqlist,
+  shown only while `done < total`, hidden the instant everything settles.
+  Verified in-browser against a mock 25-line job with artificially delayed
+  responses (1.5-4.5s each): bar appeared mid-load showing correct
+  fractional progress (15/25, 60% width), then hid once all 25 settled.
+  Deployed to production (`feature/api-v2-availability-booking`, commit
+  `3fdbd99`), service restarted healthy.
