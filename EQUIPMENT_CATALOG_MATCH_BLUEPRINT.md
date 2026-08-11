@@ -794,3 +794,67 @@ session:
   view, jobs Gantt, accessory suggestions + Reminders). See the chat
   history for the full phase breakdown and reasoning; not duplicated here
   to avoid this doc drifting out of sync with the live discussion.
+
+  **Phase 1 shipped (2026-08-11, same session)**: default job-header fields,
+  all confirmed missing/investigated live before implementing.
+  `api_v2`'s `initialise_new_booking` never sets `Jobs.Type`/`Handler`/
+  `SalesPerson` at all - confirmed by reading its params (only `job_name`
+  reaches `Jobs`, via `CreateNewEqlist`'s own `Job_Title` lookup) and by
+  checking real jobs (all NULL). All three are plain `Jobs` columns with no
+  pricing/stored-function entanglement (`Type` -> `jobtypes.Type_idx`,
+  `Handler`/`SalesPerson` -> `Users.UID`), so a direct `UPDATE` is safe -
+  new write op `update-job-header` (only sets whichever of the three fields
+  is actually passed), called right after the title/dates fixes in both
+  `createHiretrackJobShell` and `createHiretrackBooking`. `jobtypes.Type_idx
+  = 2` is "Аренда" (confirmed live) and is now always set. `Handler` always
+  defaults to `FALLBACK_USER_ID` (no picker for it yet - this app is
+  PIN-gated shared access with no per-user login, so there's no "current
+  user" concept to default to instead). `SalesPerson` defaults to the same
+  fallback but now has an explicit picker (`<select>`, populated from
+  `Users` filtered to `Active=TRUE AND IsCrew=FALSE`) on the new-job form.
+  **Default dates**: HireTrack NX's own "Jobs > Defaults" settings live in
+  the `Rules` table (confirmed live per-site: Site 1 has
+  `DefaultJobStartTime=14:00:00`, `DefaultJobEndTime=12:00:00`,
+  `DefaultJobPeriod=2`) - read live via a new `job-defaults` op (not
+  hardcoded, so a later admin change in HireTrack NX is picked up without a
+  redeploy) and exposed through `GET /api/create-job/form-options`. The
+  date-from field now pre-fills to "today at DefaultJobStartTime" instead
+  of starting empty; date-to recomputes from date-from + DefaultJobPeriod at
+  DefaultJobEndTime every time date-from changes, until the user directly
+  edits date-to themselves (tracked via a `dateToManuallyEdited` flag set
+  only by a real `input` event, since programmatic `.value` writes don't
+  fire one). Matches the "start = date + Default Job Start Time, end =
+  start + Default Job Period + Default Job End Time" convention noted
+  earlier this session from the user's own description of HireTrack's UI.
+  **Contact person**: found the `CONTACTS` table (`Company`, `Person` ->
+  `Name2`, `xLink` = JobNo, `RecordType='ctJobs'`) - confirmed live it has
+  no "company address book" concept of its own, HireTrack NX creates a
+  fresh row per job even when it's really the same real `Name2` person
+  being reused (the same `Person` id recurs across many `CONTACTS` rows
+  with different `xLink`). New read op `client-contacts` dedupes by
+  `Person` to list people previously linked to a given client Company; a
+  picker appears on the new-job form only once a client with such history
+  is selected (empty for a brand-new client, by design - no "create a new
+  contact" flow yet, out of scope for this pass). New write op
+  `add-job-contact` inserts a fresh `CONTACTS` row for the new job when a
+  contact is picked. **Default section name**: the existing "+ Добавить
+  секцию" control now pre-fills `Секция N` (N = current section count + 1)
+  instead of requiring the user to type a name before Enter/click works.
+  Both new write ops (`update-job-header`, `add-job-contact`) live-verified
+  through the real write bridge script (not just raw SQL) against a
+  throwaway test job before wiring into the app; the full combined flow was
+  then verified end-to-end against the deployed production service
+  (bypassing HTTP/auth by requiring the compiled service module directly,
+  same pattern as Phase 0's verification) - `Jobs.Type/Handler/SalesPerson`
+  and the `CONTACTS` row all came back exactly as expected. Also fixed a
+  latent serialization bug found along the way: the read bridge's
+  `serialize()` only handled `datetime`/`date` values, not `datetime.time`
+  (`Rules.DefaultJobStartTime`/`EndTime` are `TIME` columns) - would have
+  crashed `json.dump` with "Object of type time is not JSON serializable"
+  the first time `job-defaults` actually ran. Frontend UI verified in-browser
+  against a mock server: date fields pre-filled correctly, Sales Person
+  list populated, contact picker appeared only for a client with mocked
+  history and stayed hidden for one without, default section name computed
+  correctly against a job carrying 3 existing sections. Deployed to
+  production (`feature/api-v2-availability-booking`, commit `bfc216e`),
+  service restarted healthy.
