@@ -1052,3 +1052,63 @@ session:
 
   Items 2 (shortage dashboard), 3 (jobs Gantt), and 4a (accessory
   suggestions) are planned but not yet built as of this entry.
+
+  **Items 2-4a shipped (2026-08-12, same session)**:
+
+  - **Item 2 (shortage dashboard, "Нехватки" tab)**: two-tier detection on
+    top of Item 1's occupancy data - a free cheap pass flags `(type, day)`
+    cells where `dayTotals > siteOwns`, a precise confirm pass re-checks
+    via the existing rate-limited `checkHiretrackAvailability`
+    (`hiretrack-booking-api.ts`). **Critical live finding**: the cheap pass
+    alone flagged 3167 cells over the 60-day horizon (Whlevel disagrees
+    with real bookings far more than "a small minority" as the plan
+    assumed) - confirming one cell at a time projected to ~30 minutes, not
+    usable even with a progress bar (added mid-build per user request -
+    server-side `{total, done}` counter at `GET
+    /api/planning/shortages/progress`, polled every second, same shape as
+    the create-job availability bar). Fixed by collapsing each type's own
+    *consecutive* over-booked days into one run (peak booked qty, full
+    date range) before confirming - cut the call count to 263 (12x) and
+    total time to ~145s. Shortage detail shape is a date range
+    (`dayStart`/`dayEnd`), not a single day, to match. Verified live: a
+    `Shure AD2 B58a` cell showed `owned: 0` from the unreliable cheap-pass
+    number but `availableQty: 26` from the real confirm check, still
+    correctly flagged since 97 needed > 26 available - proves the two-tier
+    design neither blindly trusts the cheap pass nor drops a real
+    shortage. Cached 20 min. Commits `0548814`/`7bbb4aa`/`9b84e9d`.
+
+  - **Item 3 (jobs Gantt, "Работы" tab)**: new `jobs-gantt` operation
+    reusing the same active-jobs pre-filter as `equipment-occupancy`
+    (extracted as a shared `find_active_jobs()` helper), batch-fetches
+    each job's `Eqlists` (own `DateOut`/`DateBack`) plus a per-Eqlist
+    `Sort` line count. Frontend renders jobs as bars auto-fit to the
+    loaded jobs' own date span (no window controls, unlike occupancy's
+    fixed horizon), expandable to each job's individual Eqlist bars - same
+    visual language as Crew Bookings' job->phase bars, ported into this
+    app's own grid CSS. Verified live: 27 of 72 loaded jobs have more than
+    one Eqlist (one has 6), each with its own distinct date range, not
+    collapsed. Fast (~2.3s, no `check_availability` involved). Commit
+    `3373d90`.
+
+  - **Item 4a (accessory suggestions in `/create-job/`)**: needed **zero**
+    new backend work - every catalog item already carries its own
+    `related.Mastertype/Subtype` accessories
+    (`state.catalogById.get(typeId).accessories`, already synced by the
+    existing `equipment-catalog-full`/`-changes` ops and already used by
+    the `hiretrack-rider-match` skill), so this is purely a frontend
+    addition. After a line is added (`insertNewLine`), suggests each
+    accessory not already present anywhere on the Eqlist ("Рекомендуем
+    также: X (обычно N шт.)", or "Обязательный аксессуар" for
+    `required: true`), one-click "Добавить" reuses the exact same
+    `addEquipmentToSection` flow the manual search already uses. Verified
+    against real production catalog data (this session's Browser pane
+    can't reach the Tailscale-only server, so verification was data-level:
+    fetched `/api/create-job/catalog` and ran the exact suggestion-filter
+    logic against it) - confirmed the documented `Type 405` (Yamaha CL5)
+    -> `Type 254` (iPad) pair surfaces when only 405 is present and
+    correctly disappears once 254 is added too. Commit `2a0f760`.
+
+  All four Phase 4 items are now shipped on `feature/planning-views` (not
+  yet merged into `feature/api-v2-availability-booking`/`master`). Item
+  4's "Reminders" half remains explicitly deferred, blocked on an example
+  the user said they'd send.
