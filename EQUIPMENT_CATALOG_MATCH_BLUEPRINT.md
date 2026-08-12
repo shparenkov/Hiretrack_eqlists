@@ -1003,3 +1003,52 @@ session:
   854px-wide bars. Deployed to production
   (`feature/api-v2-availability-booking`, commit `b67d704`), service
   restarted healthy.
+
+  **Phase 4 planned, Item 1 (equipment occupancy table) shipped (2026-08-12,
+  new session)**: plan mode used to design the remaining Phase 4 backlog
+  (equipment occupancy table, shortage-only jobs dashboard, jobs Gantt,
+  accessory suggestions + Reminders). Work happens on a new branch
+  `feature/planning-views` (off `feature/api-v2-availability-booking`, same
+  "deploy from feature branch, merge later" convention as everything else
+  in this doc). Architecture: one shared PIN-gated `/planning/` app
+  (`installPlanningPinAuth`, PIN `PLANNING_PIN` default `4471`) with tabs
+  for the three Gantt/grid-shaped items, reusing Crew Bookings' day-column
+  grid CSS pattern, backed by a new own DSN/bridge pair
+  (`hiretrack_planning_read.py` -> `hiretrack-planning-read.ts`,
+  `PLANNING_ODBC_DSN`/`PLANNING_ODBC_QUERY_TIMEOUT`/`PLANNING_ODBC_TIMEOUT_MS`
+  env vars, 5-minute cache TTL - mirrors `hiretrack_crew_read.py`'s own
+  spawn+single-flight+cache shape).
+
+  Item 1 (occupancy: rows = equipment types, columns = days over a 60-day
+  horizon, cells = booked qty color-coded against `Whlevel.SiteOwns`)
+  shipped. Query: narrow to real/active jobs first (`Jobs.Status IN
+  (1,2,3,4,6) AND "Due Back" >= today`, same heuristic
+  `hiretrack_crew_read.py` uses), batch-fetch their `Eqlists`, then their
+  `Sort` lines (`Eqlno IN (...)`, filtered by each line's own `D1`/`D2`
+  overlapping the horizon), aggregate per-type day-indexed totals in
+  Python.
+
+  **Critical NexusDB performance finding** (belongs alongside this doc's
+  other NexusDB quirks in `DB_QUERY_REFERENCE.md`, noted here too since
+  it's what made this feature usable at all): a parameterized `WHERE Type
+  IN (?,?,?...)` with hundreds of placeholders is catastrophically slow -
+  confirmed live, a 721-placeholder `IN` against `Hetype` (only ~7000 rows
+  total) took ~268s, the same shape against `Whlevel` took ~267s, while an
+  *unfiltered* full scan of the same table took ~0.02s. Also confirmed a
+  direct `Sort` scan filtered only by `D1 <= ? AND D2 >= ?` across the
+  whole table (194k rows, no useful index on those columns) times out past
+  several minutes no matter how generous the timeout. Fix pattern used
+  here and worth reusing for any future query against this DB: narrow via
+  a cheap indexed/small-result filter first, chain small `IN (...)`
+  lookups only while the list stays in the tens/low-hundreds, and for any
+  lookup against a small reference table (`Hetype`, `Whlevel`, `category`
+  - anything in the few-thousand-row range) just fetch the whole table
+  unfiltered and narrow down in Python instead of building a large
+  parameterized `IN` list. The full `equipment-occupancy` operation went
+  from 536s (timing out past every configured timeout) to ~2.5s after
+  applying this. Deployed and verified end-to-end (login -> PIN ->
+  occupancy tab -> API, all through real HTTP) against production, commit
+  `235bdbc` on `feature/planning-views`.
+
+  Items 2 (shortage dashboard), 3 (jobs Gantt), and 4a (accessory
+  suggestions) are planned but not yet built as of this entry.
