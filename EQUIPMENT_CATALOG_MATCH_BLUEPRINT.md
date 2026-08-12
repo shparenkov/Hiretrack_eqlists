@@ -986,3 +986,20 @@ session:
   fractional progress (15/25, 60% width), then hid once all 25 settled.
   Deployed to production (`feature/api-v2-availability-booking`, commit
   `3fdbd99`), service restarted healthy.
+
+  **Phase 3 shipped (2026-08-12, same session)**: rectangular recent-job
+  cards. `.recent-jobs-grid` had no `grid-template-columns` at all, so each
+  card stretched to fill the page's full 900px content width - a long thin
+  bar (854x90px measured live), not a "card" in any real sense. The
+  Daybook (План склада) page this was originally styled after has the
+  identical gap on its own `.jobs-grid` (also no explicit columns), but its
+  cards only read as compact rectangles because they sit inside a narrower
+  3-column `.days` wrapper - a layout concept this page never had (no
+  "group by day" here, just a flat recent-jobs list). Added explicit
+  columns (`repeat(auto-fill, minmax(220px, 1fr))`) directly on
+  `.recent-jobs-grid` to recreate the intended card shape without relying
+  on an outer wrapper this page doesn't have. Verified in-browser: two
+  cards now render side-by-side at ~278px each instead of stacking as
+  854px-wide bars. Deployed to production
+  (`feature/api-v2-availability-booking`, commit `b67d704`), service
+  restarted healthy.
