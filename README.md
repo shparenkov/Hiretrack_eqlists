@@ -12,6 +12,10 @@ This is a **curated export**, not the primary working copy of any app:
 - `EQUIPMENT_CATALOG_MATCH_BLUEPRINT.md` — design doc for the rider-matching
   feature built into `stocktakes-app` (separate repo:
   `github.com/shparenkov/hiretrack_stocktakes`).
+- `SCANNER_APP_BLUEPRINT.md` — API research and architecture for a planned
+  commercial mobile scanner add-on (separate product, no code yet), built on
+  HireTrack NX's Remote Operation Note control API rather than the
+  booking-write API the other two docs cover.
 - `claude-skills/hiretrack-rider-match/` — backup of the live Claude Skill.
   The copy Claude Code actually loads at runtime lives at
   `~/.claude/skills/hiretrack-rider-match/` on whichever machine runs a
